@@ -13,6 +13,36 @@ spawns gets the same enforcement.
 
 ![clampdown architecture](assets/clampdown-diagram.png)
 
+> **Blue** = sidecar. **Yellow** = agent. **Green** = tool containers.
+> **Red text** = untrusted egress. **Green text** = trusted egress.
+> **Border color** = namespace trust level (see legend in diagram).
+
+---
+
+## Container overview
+
+clampdown runs three container types with different privilege levels:
+
+| | Sidecar | Agent | Tool (nested) |
+|---|---|---|---|
+| Purpose | Container runtime + firewall | AI agent process | Tools the agent spawns |
+| Base image | `FROM scratch` (no shell, no libc) | Alpine | User-chosen |
+| Capabilities | 17 (`SYS_ADMIN`, `NET_ADMIN`, ...) | 0 (`cap-drop=ALL`) | 10 default (effective set empty) |
+| Seccomp | ~70 blocked | ~115 blocked | ~115 blocked + inherited sidecar |
+| Landlock | No (incompatible with `mount()`) | workdir RW, rootfs RO | Derived from bind mounts |
+| Secrets | Registry credentials (opt-in) | API keys | None |
+| Network egress | N/A | Deny + allowlist only | Allow, private CIDRs blocked |
+| Rootfs | Read-only | Read-only | Read-only |
+| Runs as | root (userns-mapped) | Non-root | Non-root (hook-enforced) |
+| SELinux | `container_engine_t` | `container_t` | `container_t` |
+| AppArmor | unconfined | confined | confined |
+
+- The sidecar is privileged enough to run podman and enforce firewall rules, but has no
+shell and no libc so it cannot be repurposed.  
+- The agent holds API keys and can reach its provider's endpoints, but nothing else.  
+- Tool containers have open egress to the public internet but hold no secrets: 
+they cannot reach private networks, and credentials are never forwarded unless explicitly opted in.
+
 ---
 
 ## Threat model
