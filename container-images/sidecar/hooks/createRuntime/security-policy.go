@@ -250,7 +250,7 @@ func checkMounts(config Config) error {
 		if resolveErr == nil {
 			source = resolved
 		}
-		if workdir != "" && isSubPath(workdir, source) ||
+		if isSubPath(workdir, source) ||
 			source == "/sandbox-seal" || source == "/rename_exdev_shim.so" {
 			continue
 		}
@@ -395,7 +395,7 @@ func checkMountOptions(config Config) error {
 			continue
 		}
 
-		if workdir != "" && isSubPath(workdir, source) {
+		if isSubPath(workdir, source) {
 			continue
 		}
 		isInfra := false
@@ -482,6 +482,11 @@ func main() {
 	if err != nil {
 		logf("read/parse config: %v", err)
 		os.Exit(int(syscall.ENOENT))
+	}
+
+	if os.Getenv("SANDBOX_WORKDIR") == "" {
+		logf("SANDBOX_WORKDIR not set — cannot enforce policy")
+		os.Exit(int(syscall.EINVAL))
 	}
 
 	checks := []func(Config) error{
