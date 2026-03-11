@@ -38,17 +38,45 @@ These are accepted design constraints, not bugs. They are disclosed here so user
 The agent firewall resolves the domain allowlist to IP addresses at session startup and installs iptables rules for those IPs. A sufficiently motivated agent could exfiltrate data via DNS queries (rate-limited to 10/s) or by using allowlisted IP addresses after connecting through them. A DNS-intercepting proxy would close this gap but is not currently implemented.
 
 **No kernel isolation boundary.**
-Clampdown uses containers, not virtual machines. The agent shares the host kernel. A kernel exploit executed by the agent could break out of all container-level protections. The seccomp profiles block the majority of known kernel exploit primitives (io_uring, eBPF, nf_tables via CLONE_NEWUSER, splice/Dirty Pipe, MSG_OOB, MAP_GROWSDOWN/StackRot, mq_notify, TTY line disciplines, perf_event_open, userfaultfd), but three bug classes remain unfilterable: futex UAF (required for threading), AF_UNIX GC races (required for container IPC), and Dirty COW class (/proc/self/mem writes — 5 barriers contain but can't prevent). For workloads requiring kernel-level isolation, gVisor or a VM-based backend is required. See [`VECTORS.md`](VECTORS.md) for the complete CVE audit.
+Clampdown uses containers, not virtual machines. The agent shares the host
+kernel. A kernel exploit executed by the agent could break out of all
+container-level protections. This section documents exactly what clampdown
+can and cannot prevent.
 
-**Kernel CVEs.**
-Syscalls that remain allowed (futex, AF_UNIX sockets, mmap/madvise, standard I/O) may be affected by kernel CVEs that cannot be blocked at the container layer. The host-side tripwire detects post-exploitation modifications but cannot prevent exploitation. Monitor your kernel version against known CVEs.
+*What clampdown mitigates.*
+
+The seccomp profiles eliminate the exploit
+primitive required by the majority of **known** kernel escape CVEs.
+That's the point, it cannot prevent unknown CVEs at the moment.
+
+*What clampdown cannot prevent at all.*
+
+Three kernel bug classes use only
+syscalls that every container workload requires. No seccomp profile, no
+capabilities, no Landlock, no namespaces can block them:
+
+| Bug class | Syscalls | Why unfilterable |
+|-----------|----------|-----------------|
+| futex UAF | `futex()` | Required for all threading (pthreads, Go, Node.js) |
+| AF_UNIX GC race | `socket(AF_UNIX)`, `sendmsg(SCM_RIGHTS)`, `recvmsg(MSG_PEEK)` | Required for all container IPC |
+| Dirty COW class | `mmap()`, `madvise()`, `write()` to `/proc/self/mem` | Required for memory management; /proc/self/mem unmaskable |
+
+The host-side inotify tripwire detects post-exploitation host file
+modifications and restores from sha256-verified snapshots. It cannot
+prevent the exploit — it detects and contains the damage after the fact.
+
+### VM based isolation is planned for the future
+
+This will be basically a VM that runs the whole stack inside.
+Advisable for profiles where isolation from host is paramaount.
 
 ## Kernel requirements
 
 | Requirement | Minimum kernel | Behavior if absent |
 |-------------|---------------|---------------------|
-| Landlock V3 (filesystem MAC) | 6.2 | Hard fail — session refuses to start |
-| Landlock V4 (TCP connect, ioctl) | 6.7 | BestEffort — degraded silently |
-| Landlock V6 (IPC scoping) | 6.7 | Warning — abstract unix socket isolation degraded |
-| Landlock V7 | 6.10 | BestEffort — optional rights degrade silently |
+| Landlock V3 (filesystem + Truncate) | 6.2 | Hard fail — session refuses to start |
+| Landlock V4 (TCP connect) | 6.7 | BestEffort — TCP port restriction unavailable |
+| Landlock V5 (IoctlDev) | 6.10 | BestEffort — device ioctl control unavailable |
+| Landlock V6 (IPC scoping) | 6.12 | Warning — abstract unix socket + signal isolation degraded |
+| Landlock V7 (audit logging) | 6.15 | BestEffort — denied access logging unavailable |
 | cgroup v2 | 5.2 | Required for `pids_limit` enforcement |

@@ -11,7 +11,7 @@ hardened container sandbox: filesystem access is restricted to your project, net
 egress is limited to the APIs the agent needs, and every tool container the agent
 spawns gets the same enforcement.
 
-![clampdown architecture](assets/clampdown-diagram.png)
+![clampdown architecture](assets/clampdown-diagram.svg)
 
 > **Blue** = sidecar. **Yellow** = agent. **Green** = tool containers.
 > **Red text** = untrusted egress. **Green text** = trusted egress.
@@ -113,7 +113,9 @@ Tool containers launched by the agent get a derived policy based on their mount 
 writable access is granted only to paths explicitly bind-mounted into the container.
 
 Landlock V3 (kernel ≥ 6.2) is a hard requirement. The launcher refuses to start if
-Landlock is absent. Kernel ≥ 6.12 is recommended for full IPC + TCP scoping.
+Landlock is absent. Kernel ≥ 6.12 is recommended for full feature coverage (V4 TCP
+connect at 6.7, V5 IoctlDev at 6.10, V6 IPC scoping at 6.12). V7 audit logging
+requires 6.15+.
 
 ### Network isolation
 
@@ -147,7 +149,7 @@ access sets, capability lists, OCI hook pipeline, and masked path inventory — 
 |-------------|---------|-------|
 | Linux | — | Landlock is Linux-only |
 | Kernel | ≥ 6.2 | Hard requirement. Session refuses to start below this. |
-| Kernel | ≥ 6.12 | Recommended. IPC + TCP scoping (Landlock V6+) requires 6.12+. |
+| Kernel | ≥ 6.12 | Recommended. V4 TCP connect (6.7), V5 IoctlDev (6.10), V6 IPC scoping (6.12). V7 audit logging (6.15). |
 | rootless podman | any recent | or Docker (rootful with a warning) or nerdctl |
 | Go | ≥ 1.23 | Build-time only |
 
@@ -257,6 +259,7 @@ blocked for both agent and tool containers, regardless of policy.
 |------|---------|-------------|
 | `--allow-hooks` | off | Allow agent to modify `.git/hooks/` (read-only by default) |
 | `--protect` | — | Additional paths to protect read-only (repeatable; trailing `/` = directory) |
+| `--mask` | — | Additional paths to mask - prevent read (repeatable; trailing `/` = directory) |
 
 Protected paths are always read-only inside the agent and nested containers, regardless
 of flags: `.git/config`, `.gitmodules`, `.clampdownrc`, `.devcontainer`, `.envrc`,
