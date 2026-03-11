@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -14,6 +16,29 @@ import (
 	"syscall"
 	"time"
 )
+
+// responseRecorder wraps http.ResponseWriter to capture status code and
+// response body size for audit logging. Implements Unwrap so
+// http.ResponseController (used by ReverseProxy for SSE flushing) can
+// find the real Flusher/Hijacker on the underlying writer.
+type responseRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int64
+}
+
+func (r *responseRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+func (r *responseRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *responseRecorder) Write(b []byte) (int, error) {
+	n, err := r.ResponseWriter.Write(b)
+	r.bytes += int64(n)
+	return n, err
+}
 
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "proxy: "+format+"\n", args...)
@@ -37,15 +62,43 @@ func main() {
 			pr.Out.Host = upstream.Host
 			pr.Out.Header.Del(headerName)
 			pr.Out.Header.Set(headerName, headerPrefix+keyValue)
+
+			// Buffer the request body so the HTTP/2 transport can
+			// retry after receiving a GOAWAY frame from upstream.
+			// Without GetBody, the transport cannot re-read the body
+			// and returns an error to the client instead of retrying.
+			if pr.Out.Body != nil && pr.Out.GetBody == nil {
+				body, err := io.ReadAll(pr.Out.Body)
+				pr.Out.Body.Close()
+				if err != nil {
+					return
+				}
+				pr.Out.Body = io.NopCloser(bytes.NewReader(body))
+				pr.Out.GetBody = func() (io.ReadCloser, error) {
+					return io.NopCloser(bytes.NewReader(body)), nil
+				}
+				pr.Out.ContentLength = int64(len(body))
+			}
 		},
+	}
+
+	proxy.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
+		fmt.Fprintf(os.Stderr, "proxy: %s %s %s %s error: %v\n",
+			time.Now().UTC().Format(time.RFC3339), req.RemoteAddr,
+			req.Method, req.URL.Path, err)
+		w.WriteHeader(http.StatusBadGateway)
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-		start := time.Now()
-		proxy.ServeHTTP(w, req)
-		fmt.Fprintf(os.Stderr, "proxy: %s %s %s\n",
-			req.Method, req.URL.Path, time.Since(start).Truncate(time.Millisecond))
+		start := time.Now().UTC()
+		rec := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
+		proxy.ServeHTTP(rec, req)
+		fmt.Fprintf(os.Stderr, "proxy: %s %s %s %s %d req=%d resp=%d %s\n",
+			start.Format(time.RFC3339), req.RemoteAddr,
+			req.Method, req.URL.Path, rec.status,
+			req.ContentLength, rec.bytes,
+			time.Since(start).Truncate(time.Millisecond))
 	})
 
 	addr := "127.0.0.1:" + port
@@ -62,8 +115,8 @@ func main() {
 		}
 	}()
 
-	fmt.Fprintf(os.Stderr, "proxy: %s -> %s\n", addr, upstream)
-	fmt.Fprintln(os.Stderr, "proxy: ready")
+	fmt.Fprintf(os.Stderr, "proxy: %s %s -> %s\n", time.Now().UTC().Format(time.RFC3339), addr, upstream)
+	fmt.Fprintf(os.Stderr, "proxy: %s ready\n", time.Now().UTC().Format(time.RFC3339))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
