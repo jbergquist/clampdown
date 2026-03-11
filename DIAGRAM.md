@@ -26,26 +26,28 @@
 │  │    4. Write /run/sandbox/{uid,gid}, chattr +i, bind-mount RO     │    │
 │  │    5. exec → podman system service tcp:127.0.0.1:2375            │    │
 │  │                                                                  │    │
-│  │  Seccomp: seccomp_sidecar.json (denylist, ~70 blocked)           │    │
+│  │  Seccomp: seccomp_sidecar.json (denylist, ~80 blocked)           │    │
 │  │    Blocks: io_uring, perf_event_open, userfaultfd, modify_ldt,   │    │
 │  │    kcmp, process_madvise, kexec_*, init/delete/finit_module,     │    │
 │  │    add_key, request_key, splice/tee/vmsplice (Dirty Pipe),       │    │
 │  │    open_by_handle_at, swapoff/swapon, acct, vhangup,             │    │
 │  │    ioperm/iopl, clock_settime, setdomainname/sethostname,        │    │
-│  │    personality (arg-filtered), TIOCSTI/TIOCLINUX,                │    │
-│  │    IOC_WATCH_QUEUE_SET_FILTER (CVE-2022-0995),                   │    │
-│  │    socket family ≥ 17, obsolete syscalls.                        │    │
+│  │    personality (arg-filtered), TIOCSTI/TIOCLINUX/TIOCSETD,       │    │
+│  │    SIOCATMARK, IOC_WATCH_QUEUE_SET_FILTER (CVE-2022-0995),       │    │
+│  │    MSG_OOB arg-filtered (CVE-2025-38236), mq_* (CVE-2017-11176),│    │
+│  │    MAP_GROWSDOWN (CVE-2023-3269), socket family ≥ 17,            │    │
+│  │    obsolete syscalls.                                            │    │
 │  │    Allows: mount, bpf, clone3, seccomp, keyctl, ptrace           │    │
 │  │    — needed by podman/crun for container management.             │    │
 │  │                                                                  │    │
 │  │  OCI Hooks (intercept nested container lifecycle):               │    │
-│  │    precreate:    seal-inject (policy, UID, seal mount, masking)  │    │
-│  │    createRuntime: security-policy (15 checks)                    │    │
+│  │    precreate:    seal-inject (policy, UID, seal mount)            │    │
+│  │    createRuntime: security-policy (17 checks)                    │    │
 │  │                                                                  │    │
 │  │  ┌─────────────────────────────────────────────────────────┐     │    │
 │  │  │ NESTED CONTAINERS  (podman run/build inside sidecar)    │     │    │
 │  │  │                                                         │     │    │
-│  │  │  Seccomp: workload profile (~115 blocked)               │     │    │
+│  │  │  Seccomp: workload profile (~125 blocked)               │     │    │
 │  │  │  Entrypoint: sandbox-seal -- <original command>         │     │    │
 │  │  │  Landlock V7 (derived from mounts by seal-inject)       │     │    │
 │  │  │  LD_PRELOAD: rename_exdev_shim.so (EXDEV fallback)      │     │    │
@@ -58,7 +60,7 @@
 │  │  Entrypoint: sandbox-seal -- auth-proxy                          │    │
 │  │  Listens: 127.0.0.1:2376 → upstream API (rewrites auth header)   │    │
 │  │                                                                  │    │
-│  │  Seccomp: workload profile (~115 blocked)                        │    │
+│  │  Seccomp: workload profile (~125 blocked)                        │    │
 │  │  Landlock: ReadOnly:[/], ReadExec:[/usr/local/bin]               │    │
 │  │           ConnectTCP:[443, 53]                                   │    │
 │  │  cap-drop=ALL, ulimit core=0:0, 128m, 16 PIDs                    │    │
@@ -69,7 +71,7 @@
 │  │ AGENT CONTAINER  (Alpine, --network container:SIDECAR)           │    │
 │  │                                                                  │    │
 │  │  Entrypoint: sandbox-seal -- <agent binary>                      │    │
-│  │  Seccomp: workload profile (~115 blocked)                        │    │
+│  │  Seccomp: workload profile (~125 blocked)                        │    │
 │  │  Landlock: workdir RWX, rootfs RO, ConnectTCP:[443,2375,2376]    │    │
 │  │  cap-drop=ALL, no-new-privileges, read-only rootfs               │    │
 │  │                                                                  │    │
@@ -192,15 +194,14 @@ podman run ...
 │  4. Inject SANDBOX_POLICY env var            │
 │  5. Add /.sandbox/seal bind mount            │
 │  6. Add hidepid=2 to proc mount              │
-│  7. Append masked paths (/proc + /sys)       │
-│  8. Inject opt-in credentials                │
+│  7. Inject opt-in credentials                │
 └──────────────────┬───────────────────────────┘
                    │
      container created (crun)
                    │
                    ▼
 ┌─────────────────────────────────────────────┐
-│  CREATERUNTIME: security-policy (15 checks) │
+│  CREATERUNTIME: security-policy (17 checks) │
 │                                             │
 │   1. checkCaps             → EPERM          │
 │   2. checkSeccomp          → EPERM          │
@@ -217,6 +218,8 @@ podman run ...
 │  13. checkRlimits          → EPERM          │
 │  14. checkImageRef         → EACCES/warn    │
 │  15. checkMountReadonly    → EACCES         │
+│  16. checkProcMount        → EPERM          │
+│  17. checkAdditionalGids   → EPERM          │
 └──────────────────┬──────────────────────────┘
                    │
      container process starts
@@ -322,14 +325,17 @@ intercept the container lifecycle before the workload starts.
 
 seal-inject (precreate) overwrites the user to the sandbox UID, prepends
 sandbox-seal to the entrypoint, derives a Landlock policy from the mount
-list, injects credential mounts if present, adds hidepid=2 to procfs,
-and masks sensitive /proc and /sys paths. It does not run for build
-containers.
+list, injects credential mounts if present, and adds hidepid=2 to procfs.
+Sensitive /proc and /sys paths are masked via containers.conf volumes
+(not seal-inject), which applies to both `podman run` and `podman build`.
+seal-inject does not run for build containers.
 
-security-policy (createRuntime) validates the container against 15
+security-policy (createRuntime) validates the container against 17
 checks covering capabilities, seccomp, namespaces, mounts, devices,
-masked/readonly paths, sysctls, rlimits, image refs, and mount
-propagation. Each violation blocks the container with a specific errno.
+masked paths (verifies /dev/null or empty-dir bind mounts), readonly
+paths, sysctls, rlimits, image refs, mount propagation, /proc mount
+type, and supplementary groups. Each violation blocks the container
+with a specific errno.
 
 ### Host-side tripwire
 
@@ -350,17 +356,24 @@ The tripwire runs outside all namespaces and catches that. Disabled with
 
 ### Seccomp profiles
 
-Two profiles exist. The **sidecar profile** (~70 blocked syscalls) is a
-light denylist that blocks what the container engine never needs while
-allowing mount, bpf, ptrace, and clone for podman. The kernel inherits
-it to all child processes.
+Two profiles exist. The **sidecar profile** (~80 blocked syscalls) is a
+denylist that blocks what the container engine never needs while allowing
+mount, bpf, ptrace, and clone for podman. The kernel inherits it to all
+child processes.
 
-The **workload profile** (~115 blocked syscalls) is stricter, applied to
+The **workload profile** (~125 blocked syscalls) is stricter, applied to
 the agent, proxy, and nested containers. It blocks container escape
-primitives, the new mount API, device creation, kernel exploits,
-privilege escalation, kernel keyring, system disruption, hardware I/O,
-time manipulation, SysV IPC, terminal injection (TIOCSTI), and W^X
-memory. For nested containers it layers on top of the sidecar profile.
+primitives (mount/umount/setns/pivot_root/chroot), the new mount API,
+device creation, kernel exploit primitives (io_uring, bpf, userfaultfd,
+splice/tee/vmsplice, perf_event_open), user namespace creation
+(CLONE_NEWUSER arg-filtered on clone/unshare), privilege escalation
+(ptrace, process_vm_*, execveat), kernel keyring, system disruption,
+hardware I/O, time manipulation, SysV IPC, POSIX message queues
+(CVE-2017-11176 class), terminal injection (TIOCSTI/TIOCLINUX/TIOCSETD),
+SIOCATMARK (CVE-2025-38236), MSG_OOB arg-filtered on send*/recv*
+(CVE-2025-38236), MAP_GROWSDOWN (CVE-2023-3269 StackRot class), W^X
+memory, and socket families >= 17. For nested containers it layers on
+top of the sidecar profile.
 
 ### Landlock filesystem tiers (nested containers)
 
@@ -373,25 +386,34 @@ memory. For nested containers it layers on top of the sidecar profile.
 
 All tiers include Refer (prevents EXDEV). MakeChar/MakeBlock excluded.
 
-### Masked paths (nested containers)
+### Masked paths (all containers — run + build)
 
-| Path | Reason |
-|------|--------|
-| /proc/kallsyms | Kernel symbol addresses (KASLR bypass) |
-| /proc/kcore | Physical memory dump |
-| /proc/config.gz | Kernel config (security feature disclosure) |
-| /proc/modules | Loaded modules (attack surface enumeration) |
-| /proc/version | Kernel version (exploit selection) |
-| /sys/kernel/debug | ftrace, kprobes |
-| /sys/kernel/tracing | ftrace tracing interface |
-| /sys/kernel/security | LSM policy files |
-| /sys/kernel/vmcoreinfo | Crash dump format layout |
-| /sys/fs/bpf | Pinned eBPF maps/programs |
-| /sys/module | Kernel module parameters |
-| /sys/devices/virtual/dmi | Hardware fingerprint |
+Enforced via containers.conf volumes on the sidecar's read-only rootfs.
+Files are masked with /dev/null bind mounts; directories with /.empty
+bind mounts. Applies uniformly to both `podman run` and `podman build`.
+The agent cannot override these — see VECTORS.md for the full bypass
+analysis.
 
-/proc/sysrq-trigger uses readonlyPaths (not maskedPaths) because writes
-to /dev/null device nodes bypass the ro mount flag.
+security-policy `checkMaskedPaths` validates defense-in-depth: each path
+must be covered by either OCI maskedPaths or a /dev/null/empty-dir bind
+mount. The check verifies mount sources are genuinely /dev/null (char
+device major 1, minor 3) or empty directories — not attacker-controlled
+files.
+
+| Path | Type | Reason |
+|------|------|--------|
+| /proc/kallsyms | file | Kernel symbol addresses (KASLR bypass) |
+| /proc/kcore | file | Physical memory dump |
+| /proc/modules | file | Loaded modules (attack surface enumeration) |
+| /proc/version | file | Kernel version (exploit selection) |
+| /proc/sysrq-trigger | file | System request trigger (DoS) |
+| /sys/kernel/vmcoreinfo | file | Crash dump format layout |
+| /sys/kernel/debug | dir | ftrace, kprobes |
+| /sys/kernel/tracing | dir | ftrace tracing interface |
+| /sys/kernel/security | dir | LSM policy files |
+| /sys/fs/bpf | dir | Pinned eBPF maps/programs |
+| /sys/module | dir | Kernel module parameters |
+| /sys/devices/virtual/dmi | dir | Hardware fingerprint |
 
 ### File provenance
 
