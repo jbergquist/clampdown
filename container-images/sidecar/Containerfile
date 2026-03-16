@@ -22,7 +22,7 @@ ARG TARGETARCH
 # Pinned version — update deliberately after verifying CVE patches.
 # v5.8.0 includes fixes for CVE-2024-1753 (build-time escape) and
 # bundles crun with fixes for CVE-2025-31133/52565/52881 (procfs writes).
-ARG PODMAN_VERSION=v5.8.0
+ARG PODMAN_VERSION=v5.8.1
 RUN echo "podman-static ${PODMAN_VERSION} (${TARGETARCH})" \
     && wget -qO- "https://github.com/mgoltzsche/podman-static/releases/download/${PODMAN_VERSION}/podman-linux-${TARGETARCH}.tar.gz" \
     | tar xz --strip-components=1 -C /
