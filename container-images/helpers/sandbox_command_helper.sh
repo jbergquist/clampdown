@@ -44,9 +44,13 @@ Use a container to test connectivity:
 
 su()
 {
-	echo "su: not available. This container has no root access (cap-drop=ALL).
-If you need root for a command, run it in a container (root inside its own namespace):
-    podman run -v \"\$PWD\":\"\$PWD\" -w \"\$PWD\" IMAGE COMMAND"
+	echo "su: not available. This container has no root access (cap-drop=ALL)."
+	return 2
+}
+
+sudo()
+{
+	echo "sudo: not available. This container has no root access (cap-drop=ALL)."
 	return 2
 }
 

@@ -31,9 +31,10 @@ SIDECAR_BINS := container-images/sidecar/seal/sandbox-seal \
 		container-images/sidecar/hooks/createRuntime/security-policy \
 		container-images/sidecar/hooks/precreate/seal-inject
 
-HELPERS_SRC   := container-images/sandbox-helpers.sh
-CLAUDE_SRCS   := container-images/claude/Containerfile $(HELPERS_SRC)
-OPENCODE_SRCS := container-images/opencode/Containerfile $(HELPERS_SRC)
+HELPERS_SRC       := container-images/helpers/sandbox_command_helper.sh
+NETWORK_HELPER    := container-images/helpers/sandbox_network_helper.c
+CLAUDE_SRCS       := container-images/claude/Containerfile $(HELPERS_SRC) $(NETWORK_HELPER)
+OPENCODE_SRCS     := container-images/opencode/Containerfile $(HELPERS_SRC) $(NETWORK_HELPER)
 
 .PHONY: all test test-integration seal sidecar claude opencode proxy launcher install clean
 

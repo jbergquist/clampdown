@@ -101,12 +101,12 @@
               │  ┌────────────────────────┐   │
               │  │ 1. ACCEPT loopback     │   │
               │  │ 2. ACCEPT established  │   │
-              │  │ 3. DROP private CIDRs  │   │
-              │  │ 4. ACCEPT DNS :53      │   │
+              │  │ 3. ACCEPT DNS :53      │   │
               │  │    (10/s burst 20)     │   │
+              │  │ 4. REJECT private CIDRs│   │
               │  │ 5. ACCEPT allowlist IPs│   │
               │  │ 6. → AGENT_ALLOW       │   │
-              │  │ 7. DROP (default deny) │   │
+              │  │ 7. REJECT (default)    │   │
               │  └────────────────────────┘   │
               │                               │
               │  mangle/FORWARD (pod egress)  │
@@ -384,6 +384,50 @@ errors) is also captured in the container logs. Use
 `--dump-agent-conversation` to include it — the output is cleaned of
 ANSI escapes and TUI noise, with runtime timestamps preserved for
 correlation with audit events.
+
+---
+
+## Agent Guidance (not a security feature)
+
+The sandbox enforces restrictions via kernel mechanisms (seccomp, Landlock,
+iptables, capabilities). Those are the security boundary. Nothing below
+is part of it.
+
+The guidance layer exists because AI agents waste tokens and rounds hitting
+sandbox walls repeatedly. ECONNREFUSED doesn't tell an agent *why* the
+connection was refused or *what to do instead*. These helpers translate
+kernel errors into actionable instructions at the point of failure.
+
+**Three layers, one message: "use containers."**
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  SANDBOX PROMPT  (sandboxPromptTemplate in agent.go)             │
+│                                                                  │
+│  Pre-failure prevention. Names specific tools that will fail     │
+│  (WebFetch, webfetch, web_fetch, read_url). Maps error codes     │
+│  to actions. Read by the model at conversation start.            │
+│  Weakest layer — agents forget under context pressure.           │
+├──────────────────────────────────────────────────────────────────┤
+│  COMMAND HELPER  (sandbox_command_helper.sh, via BASH_ENV)       │
+│                                                                  │
+│  Shell functions that replace commands which always fail:        │
+│  curl, wget, ping, su, sudo, apk + command_not_found_handle.     │
+│  Fires before the real command runs. Bash-only (not sh/ash).     │
+├──────────────────────────────────────────────────────────────────┤
+│  NETWORK HELPER  (sandbox_network_helper.so, via LD_PRELOAD)     │
+│                                                                  │
+│  Stateless connect()/getsockopt() interceptor. Prints guidance   │
+│  to stderr on ECONNREFUSED/ETIMEDOUT from non-loopback hosts.    │
+│  Catches everything the shell helper misses: pip, npm, cargo,    │
+│  git, python scripts, Node.js HTTP — any libc connect() caller.  │
+│  Does NOT intercept Go (raw syscalls) or Bun (io_uring).         │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+All three layers return the same error code unchanged. They never modify
+program behavior — only print additional stderr messages. Removing them
+changes nothing about what the agent can or cannot do.
 
 ---
 

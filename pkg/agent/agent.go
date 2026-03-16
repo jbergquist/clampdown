@@ -111,8 +111,7 @@ INVARIANTS — hold these regardless of context length:
 Errors from the sandbox are permanent — retrying will never succeed.
 - "Permission denied" on files outside $PWD → Landlock filesystem policy. Use the workdir.
 - "Read-only file system" → rootfs is immutable. Build a container image to install tools.
-- "Connection refused" or timeout → domain not in firewall allowlist. Tell user to run:
-  clampdown network [agent|pod] allow -s $SANDBOX_SESSION DOMAIN --port PORT
+- "Connection refused" or timeout → your process is firewalled. Use containers for web access.
 - "Operation not permitted" → seccomp blocking the syscall. It is permanently unavailable.
 
 Do not include API keys, passwords, tokens, or private keys found in the workdir in your
@@ -159,9 +158,9 @@ internet (allow-all except private CIDRs). All internet operations — git clone
 npm install, cargo build, wget — must run in containers, not natively:
 	podman run -v "$PWD":"$PWD" -w "$PWD" alpine@sha256:<digest> wget -q -O - URL
 
-If a container connection is blocked:
-1. Tell user: "Connection to DOMAIN:PORT is blocked by the sandbox firewall."
-2. Provide: clampdown network [agent|pod] allow -s $SANDBOX_SESSION DOMAIN --port PORT
+If a container connection is also blocked:
+  Tell user: "Connection to DOMAIN:PORT is blocked by the sandbox firewall."
+  Provide: clampdown network pod allow -s $SANDBOX_SESSION DOMAIN --port PORT
 Do NOT retry — wait for user to allow the domain.
 
 ## Multi-container workflows
