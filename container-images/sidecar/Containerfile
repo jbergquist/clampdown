@@ -83,4 +83,4 @@ COPY --from=shim /rename_exdev_shim.so /rename_exdev_shim.so
 ENV BUILDAH_ISOLATION=oci
 
 ENTRYPOINT ["/entrypoint"]
-CMD ["/usr/local/bin/podman", "--log-level=debug", "system", "service", "--time=0", "tcp:127.0.0.1:2375"]
+CMD ["/usr/local/bin/podman", "system", "service", "--time=0", "tcp:127.0.0.1:2375"]

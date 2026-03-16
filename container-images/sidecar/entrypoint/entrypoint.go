@@ -43,6 +43,13 @@ func iptRun(bin string, args ...string) error {
 	return cmd.Run()
 }
 
+// iptRunQuiet executes an iptables command, ignoring errors and
+// suppressing output. Used for operations that are expected to fail
+// (e.g., flushing a chain that doesn't exist yet on first boot).
+func iptRunQuiet(bin string, args ...string) error {
+	return exec.CommandContext(context.Background(), bin, args...).Run()
+}
+
 // classifyIPs splits a list of IP/CIDR entries into IPv4 and IPv6 buckets.
 func classifyIPs(entries []string) ([]string, []string) {
 	var ip4s, ip6s []string
@@ -102,11 +109,11 @@ func privateRanges(bin string) []string {
 }
 
 // ensureChain flushes and recreates a user-defined chain. Flush and delete
-// fail on first run (chain doesn't exist yet) — that's expected.
-// Create must succeed.
+// fail on first run (chain doesn't exist yet) — that's expected, so
+// stderr is suppressed for those calls. Create must succeed.
 func ensureChain(bin, table, chain string) error {
-	_ = iptRun(bin, "-t", table, "-F", chain)
-	_ = iptRun(bin, "-t", table, "-X", chain)
+	_ = iptRunQuiet(bin, "-t", table, "-F", chain)
+	_ = iptRunQuiet(bin, "-t", table, "-X", chain)
 	err := iptRun(bin, "-t", table, "-N", chain)
 	if err != nil {
 		return fmt.Errorf("%s create chain %s/%s: %w", bin, table, chain, err)
