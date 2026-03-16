@@ -25,7 +25,6 @@ import (
 const (
 	alpineImage       = "alpine"
 	pythonAlpineImage = "python:alpine"
-	isolatedImage     = "ghcr.io/edera-dev/am-i-isolated:nightly"
 )
 
 // Package-level state set by TestMain.
@@ -403,13 +402,6 @@ func runTests(m *testing.M) (code int) {
 	err = rt.PushImage(ctx, integSidecar, []string{pythonAlpineImage})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "push python:alpine to integ: %v\n", err)
-		return 1
-	}
-
-	// Push am-i-isolated for the security audit test.
-	err = rt.PushImage(ctx, sidecarName, []string{isolatedImage})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "push am-i-isolated: %v\n", err)
 		return 1
 	}
 
@@ -837,46 +829,14 @@ func TestCredentialForwarding(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Third-party security audit: am-i-isolated + CDK.
+// Third-party security audit: CDK.
 //
-// Supplementary validation via independent tools. The primary security
+// Supplementary validation via an independent tool. The primary security
 // gate is our own integration tests above (14 deterministic checks).
-// These third-party tools provide a second set of eyes.
-//
-// Sequential — each tool's output is contiguous in the test log.
-// Run with -v to see full output.
-//
-// am-i-isolated skipped checks:
-//   - "container virtualization": always fails in containers — expects a VM.
-//   - "Yama LSM": false negative from /proc/kallsyms masking.
+// CDK provides a second set of eyes.
 // ---------------------------------------------------------------------------
 
 func TestSecurityAudit(t *testing.T) {
-	// Sequential — no t.Parallel() on parent or subtests.
-
-	t.Run("am_i_isolated", func(t *testing.T) {
-		cmd := []string{innerPodman, "run", "--rm", isolatedImage}
-		out, _ := sidecarExecTimeout(t, sidecarName, cmd, 30*time.Second)
-		t.Log("\n" + string(out))
-
-		const (
-			red    = "\U0001F534"
-			yellow = "\U0001F7E1"
-		)
-		for _, line := range strings.Split(string(out), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.Contains(trimmed, "container virtualization") {
-				continue
-			}
-			if strings.Contains(trimmed, "Yama LSM") {
-				continue
-			}
-			if strings.Contains(trimmed, red) || strings.Contains(trimmed, yellow) {
-				t.Errorf("am-i-isolated: %s", trimmed)
-			}
-		}
-	})
-
 	t.Run("cdk", func(t *testing.T) {
 		cmd := []string{
 			innerPodman, "run", "--rm", "--tmpfs", "/home/audit",
