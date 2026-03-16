@@ -9,7 +9,7 @@ command_not_found_handle()
 {
 	echo "'${1}' is not installed. Re-run the command in a container.
 Do not check paths, alternatives, or install methods.
-    podman run --rm -v \"\$PWD\":\"\$PWD\" -w \"\$PWD\" IMAGE COMMAND [ARGS]
+    podman run -v \"\$PWD\":\"\$PWD\" -w \"\$PWD\" IMAGE COMMAND [ARGS]
 Host credentials (git, gh, ssh, registry auth) are forwarded into containers automatically by the sandbox.
 If not found, prompt the user about them, don't try to configure auth, mount credential files, or set tokens manually.
 Common images: python, golang, gcc, rust, ruby, node, php, perl, alpine/git.
@@ -22,7 +22,7 @@ curl()
 {
 	echo "curl: your process is firewalled to approved API domains only.
 Containers have open internet. Run wget in a container:
-    podman run --rm -v \"\$PWD\":\"\$PWD\" -w \"\$PWD\" alpine@sha256:<digest> curl \"\$@\""
+    podman run -v \"\$PWD\":\"\$PWD\" -w \"\$PWD\" alpine@sha256:<digest> curl \"\$@\""
 	return 2
 }
 
@@ -30,7 +30,7 @@ wget()
 {
 	echo "wget: your process is firewalled to approved API domains only.
 Containers have open internet. Run wget in a container:
-    podman run --rm -v \"\$PWD\":\"\$PWD\" -w \"\$PWD\" alpine@sha256:<digest> wget \"\$@\""
+    podman run -v \"\$PWD\":\"\$PWD\" -w \"\$PWD\" alpine@sha256:<digest> wget \"\$@\""
 	return 2
 }
 
@@ -38,7 +38,7 @@ ping()
 {
 	echo "ping: your process is firewalled. ICMP is blocked by seccomp.
 Use a container to test connectivity:
-    podman run --rm alpine@sha256:<digest> ping \"\$@\""
+    podman run alpine@sha256:<digest> ping \"\$@\""
 	return 2
 }
 
@@ -46,7 +46,7 @@ su()
 {
 	echo "su: not available. This container has no root access (cap-drop=ALL).
 If you need root for a command, run it in a container (root inside its own namespace):
-    podman run --rm -v \"\$PWD\":\"\$PWD\" -w \"\$PWD\" IMAGE COMMAND"
+    podman run -v \"\$PWD\":\"\$PWD\" -w \"\$PWD\" IMAGE COMMAND"
 	return 2
 }
 

@@ -125,12 +125,12 @@ Missing tool — build an image:
 	printf "FROM alpine:3.21\nRUN apk add --no-cache PKG\n" | podman build -t name -
 
 Mount $PWD only. No TTY. No "sh -c TOOL args" — pass args directly to entrypoints:
-	podman run --rm -v "$PWD":"$PWD" -w "$PWD" IMAGE [ARGS]
+	podman run -v "$PWD":"$PWD" -w "$PWD" IMAGE [ARGS]
 
 Resolve digest before every run:
 	podman pull IMAGE:TAG
 	podman image inspect IMAGE:TAG --format '{{.Digest}}'
-	podman run --rm IMAGE@sha256:<digest> ...
+	podman run IMAGE@sha256:<digest> ...
 
 Use official Docker Hub images for language runtimes:
 	C#/F#=mcr.microsoft.com/dotnet/sdk, C/C++=gcc, Clojure=clojure, Dart=dart,
@@ -155,7 +155,7 @@ Container caches MUST go under $PWD/.{{AGENT}}/$SANDBOX_SESSION (cleaned on exit
 Your process is firewalled (deny-all + domain allowlist). Containers you spawn have open
 internet (allow-all except private CIDRs). All internet operations — git clone, pip install,
 npm install, cargo build, wget — must run in containers, not natively:
-	podman run --rm -v "$PWD":"$PWD" -w "$PWD" alpine@sha256:<digest> wget -q -O - URL
+	podman run -v "$PWD":"$PWD" -w "$PWD" alpine@sha256:<digest> wget -q -O - URL
 
 If a container connection is blocked:
 1. Tell user: "Connection to DOMAIN:PORT is blocked by the sandbox firewall."
@@ -168,5 +168,5 @@ Use podman networks for container-to-container communication (not -p port publis
 	podman network create mynet
 	podman run -d --name db --network mynet postgres
 	podman run -d --name app --network mynet myapp
-	podman run --rm --network mynet alpine wget -qO- http://db:5432
+	podman run --network mynet alpine wget -qO- http://db:5432
 `
