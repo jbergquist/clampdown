@@ -27,6 +27,7 @@ type Config struct {
 	RequireDigest   string   `json:"require_digest"`
 	Runtime         string   `json:"runtime"`
 	SSH             bool     `json:"ssh"`
+	UnmaskPaths     []string `json:"unmask_paths"`
 }
 
 // LoadConfig reads $XDG_CONFIG_HOME/clampdown/config.json.

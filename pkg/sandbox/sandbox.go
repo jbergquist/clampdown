@@ -49,6 +49,7 @@ type Options struct {
 	RegistryAuth    bool
 	RequireDigest   string
 	SSH             bool
+	UnmaskPaths     []string
 	Workdir         string
 }
 
@@ -116,9 +117,13 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 		})
 	}
 
-	// Build masked path list (universal + user --mask flags).
-	masked := make([]agent.MaskedPath, len(mounts.UniversalMaskedPaths))
-	copy(masked, mounts.UniversalMaskedPaths)
+	// Build masked path list (universal + user --mask, minus --unmask).
+	var masked []agent.MaskedPath
+	for _, m := range mounts.UniversalMaskedPaths {
+		if !slices.Contains(opts.UnmaskPaths, m.Path) {
+			masked = append(masked, m)
+		}
+	}
 	for _, raw := range opts.MaskPaths {
 		masked = append(masked, agent.MaskedPath{
 			Path:  strings.TrimSuffix(raw, "/"),

@@ -260,6 +260,7 @@ blocked for both agent and tool containers, regardless of policy.
 | `--allow-hooks` | off | Allow agent to modify `.git/hooks/` (read-only by default) |
 | `--protect` | — | Additional paths to protect read-only (repeatable; trailing `/` = directory) |
 | `--mask` | — | Additional paths to mask - prevent read (repeatable; trailing `/` = directory) |
+| `--unmask` | — | Remove paths from the default mask list (e.g. `--unmask .env`) |
 
 Protected paths are always read-only inside the agent and nested containers, regardless
 of flags: `.git/config`, `.gitmodules`, `.clampdownrc`, `.devcontainer`, `.envrc`,
@@ -269,6 +270,9 @@ RW re-mounts are blocked by the security-policy hook.
 
 Masked paths are hidden entirely (replaced with `/dev/null`): `.env`, `.envrc`, `.npmrc`,
 `.clampdownrc`. The agent sees the path exists but reads empty content.
+
+Use `--unmask` to selectively restore access (e.g. `--unmask .env` for projects
+that need it). Persistent via `config.json`: `{"unmask_paths": [".env"]}`.
 
 ### Resources
 

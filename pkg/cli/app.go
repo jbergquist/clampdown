@@ -147,6 +147,10 @@ func Run(args []string) error {
 				Name:  "mask",
 				Usage: "Paths to mask (content hidden; repeatable; trailing / = directory)",
 			},
+			&ucli.StringSliceFlag{
+				Name:  "unmask",
+				Usage: "Remove paths from the default mask list (e.g. --unmask .env)",
+			},
 		},
 		Commands: append(agentCommands(cfg),
 			&ucli.Command{
@@ -330,6 +334,7 @@ func runAgent(agName string, cfg Config) ucli.ActionFunc {
 			RegistryAuth:    cmd.Bool("registry-auth"),
 			RequireDigest:   cmd.String("require-digest"),
 			SSH:             cmd.Bool("ssh"),
+			UnmaskPaths:     append(cfg.UnmaskPaths, cmd.StringSlice("unmask")...),
 			Workdir:         workdir,
 		}
 
