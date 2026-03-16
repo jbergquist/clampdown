@@ -271,8 +271,9 @@ The agent never receives real API credentials. The launcher gives it a
 dummy key (`sk-proxy`) and overrides the API base URL to point at the
 local proxy on port 2376. The proxy receives the agent's request, strips
 the dummy auth header, injects the real API key, and forwards the
-request to the upstream API. The proxy logs every request (method, path,
-duration) to stderr.
+request to the upstream API. The proxy logs every request with model
+name, method, path, status, sizes, and duration to stderr using the
+`clampdown:` prefix for audit trail integration.
 
 Keys are resolved from two sources: the host environment and
 .clampdownrc. Neither source is forwarded into the agent container.
@@ -348,6 +349,40 @@ writes (container uid 0 maps to a sub-UID that doesn't own the files),
 but a full escape to the host user would bypass in-container protections.
 The tripwire runs outside all namespaces and catches that. Disabled with
 `--disable-tripwire`.
+
+### Audit trail
+
+Every session produces a structured audit log. All components emit lines
+prefixed with `clampdown: <RFC3339> <source>:` so they can be filtered,
+merged, and sorted chronologically across containers.
+
+**Sources:**
+- **OCI hooks** (security-policy, seal-inject) — write to `/proc/1/fd/2`
+  (sidecar PID 1 stderr). Log PASS/BLOCKED with container ID, hostname,
+  image, command, and Landlock policy summary.
+- **Auth proxy** — logs every API request with model name, method, path,
+  status, request/response sizes, and duration.
+- **Launcher** — writes START, STOP, SIGNAL, TAMPER events via the `/log`
+  sidecar binary. Firewall changes (allow/block/reset) and image pushes
+  are also logged.
+- **Tripwire** — writes TAMPER events directly to the audit file.
+
+The `/log` binary is a standalone static Go binary in the sidecar
+(FROM scratch, stdlib only). The launcher calls it via
+`podman exec <sidecar> /log <source> <message>` to inject lines into
+the sidecar's log stream.
+
+On session end, the launcher reads sidecar and proxy container logs,
+filters for `clampdown:` lines, strips the runtime timestamp prefix,
+and writes them to a persistent audit file at
+`$STATE/audit-<session>.log`. This file survives `clampdown delete`.
+
+`clampdown logs -s <session>` merges and sorts all container logs
+chronologically. The agent's full conversation (tool calls, responses,
+errors) is also captured in the container logs. Use
+`--dump-agent-conversation` to include it — the output is cleaned of
+ANSI escapes and TUI noise, with runtime timestamps preserved for
+correlation with audit events.
 
 ---
 

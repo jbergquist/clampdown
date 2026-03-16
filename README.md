@@ -310,6 +310,9 @@ clampdown list
 # Stop a session and clean up its containers
 clampdown delete -s <session-id>
 
+# View audit events from a session (merged, sorted)
+clampdown logs -s <session-id>
+
 # Remove all cached container storage for the current project
 clampdown prune
 ```
@@ -318,9 +321,22 @@ clampdown prune
 
 ## Audit log
 
-Every session produces an audit trail covering API requests, OCI hook decisions,
-firewall changes, session lifecycle, tripwire events, and image pushes. Events use
-a `clampdown:` prefix with RFC3339 timestamps.
+Every session produces a structured audit trail for postmortem analysis.
+All components emit lines prefixed with `clampdown: <RFC3339> <source>:`
+so events can be filtered, merged, and sorted chronologically across
+containers.
+
+**What gets logged:**
+
+| Source | Events |
+|--------|--------|
+| `session` | START (agent, workdir, pid), STOP (reason), SIGNAL |
+| `security-policy` | PASS/BLOCKED per nested container (image, command, check count) |
+| `seal-inject` | PASS per nested container (Landlock policy summary) |
+| `proxy` | Every API request (method, path, status, model, sizes, duration) |
+| `firewall` | Rule changes (allow/block/reset with targets and ports) |
+| `image` | Image pushes into the session |
+| `launcher` | Tripwire TAMPER events |
 
 ```sh
 # View audit events from a running session (merged, sorted)
@@ -329,6 +345,11 @@ clampdown logs -s <session-id>
 # Include the full agent conversation (large)
 clampdown logs -s <session-id> --dump-agent-conversation
 ```
+
+The agent's full conversation (tool calls, responses, errors) is also
+captured in the container logs. Use `--dump-agent-conversation` to
+include it — the output is cleaned of ANSI escapes and TUI noise,
+with runtime timestamps preserved for correlation with audit events.
 
 The audit log is persisted to `~/.cache/clampdown/<project>/state/audit-<session>.log`
 when the session ends. This file survives `clampdown delete` (container removal) —
