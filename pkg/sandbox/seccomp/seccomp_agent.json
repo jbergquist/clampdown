@@ -374,6 +374,27 @@
         { "index": 3, "value": 256, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 256 }
       ],
       "comment": "Block MAP_GROWSDOWN (0x100): deprecated stack-growth flag. No modern libc (glibc NPTL, musl, Go) uses it. Prevents CVE-2023-3269 (StackRot) class — VMA maple tree corruption via MAP_GROWSDOWN page faults. Also prevents sandbox address-range bypass."
+    },
+
+    {
+      "names": ["prctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 4, "op": "SCMP_CMP_EQ" },
+        { "index": 1, "value": 0, "op": "SCMP_CMP_GT" }
+      ],
+      "comment": "Block prctl(PR_SET_DUMPABLE, >0): prevents re-enabling core dumps after RLIMIT_CORE=0. Core dumps can leak secrets from process memory. PR_SET_DUMPABLE(0) (disable) is still allowed."
+    },
+
+    {
+      "names": ["prctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 1499557217, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block prctl(PR_SET_PTRACER, 0x59616d61): prevents designating a ptracer to bypass Yama ptrace_scope. Defense-in-depth alongside ptrace seccomp block."
     }
 
   ]

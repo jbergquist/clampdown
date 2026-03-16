@@ -28,7 +28,7 @@ clampdown runs three container types with different privilege levels:
 | Purpose | Container runtime + firewall | AI agent process | Tools the agent spawns |
 | Base image | `FROM scratch` (no shell, no libc) | Alpine | User-chosen |
 | Capabilities | 16 (`SYS_ADMIN`, `NET_ADMIN`, ...) | 0 (`cap-drop=ALL`) | 10 default (effective set empty) |
-| Seccomp | ~84 blocked | ~132 blocked | ~132 blocked + inherited sidecar |
+| Seccomp | ~85 blocked | ~133 blocked | ~133 blocked + inherited sidecar |
 | Landlock | No (incompatible with `mount()`) | workdir RW, rootfs RO | Derived from bind mounts |
 | Secrets | Registry credentials (opt-in) | None (`sk-proxy` dummy key) | None |
 | Network egress | N/A | Deny + allowlist only | Allow, private CIDRs blocked |

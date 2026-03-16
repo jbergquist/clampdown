@@ -26,7 +26,7 @@
 │  │    4. Write /run/sandbox/{uid,gid}, bind-mount RO                │    │
 │  │    5. exec → podman system service tcp:127.0.0.1:2375            │    │
 │  │                                                                  │    │
-│  │  Seccomp: seccomp_sidecar.json (denylist, ~84 blocked)           │    │
+│  │  Seccomp: seccomp_sidecar.json (denylist, ~85 blocked)           │    │
 │  │    Blocks: io_uring, perf_event_open, userfaultfd, modify_ldt,   │    │
 │  │    kcmp, process_madvise, kexec_*, init/delete/finit_module,     │    │
 │  │    add_key, request_key, splice/tee/vmsplice (Dirty Pipe),       │    │
@@ -47,7 +47,7 @@
 │  │  ┌─────────────────────────────────────────────────────────┐     │    │
 │  │  │ NESTED CONTAINERS  (podman run/build inside sidecar)    │     │    │
 │  │  │                                                         │     │    │
-│  │  │  Seccomp: workload profile (~132 blocked)               │     │    │
+│  │  │  Seccomp: workload profile (~133 blocked)               │     │    │
 │  │  │  Entrypoint: sandbox-seal -- <original command>         │     │    │
 │  │  │  Landlock V7 (derived from mounts by seal-inject)       │     │    │
 │  │  │  LD_PRELOAD: rename_exdev_shim.so (EXDEV fallback)      │     │    │
@@ -60,7 +60,7 @@
 │  │  Entrypoint: sandbox-seal -- auth-proxy                          │    │
 │  │  Listens: 127.0.0.1:2376 → upstream API (rewrites auth header)   │    │
 │  │                                                                  │    │
-│  │  Seccomp: workload profile (~132 blocked)                        │    │
+│  │  Seccomp: workload profile (~133 blocked)                        │    │
 │  │  Landlock: ReadOnly:[/], ReadExec:[/usr/local/bin]               │    │
 │  │           ConnectTCP:[443, 53]                                   │    │
 │  │  cap-drop=ALL, ulimit core=0:0, 128m, 16 PIDs                    │    │
@@ -71,7 +71,7 @@
 │  │ AGENT CONTAINER  (Alpine, --network container:SIDECAR)           │    │
 │  │                                                                  │    │
 │  │  Entrypoint: sandbox-seal -- <agent binary>                      │    │
-│  │  Seccomp: workload profile (~132 blocked)                        │    │
+│  │  Seccomp: workload profile (~133 blocked)                        │    │
 │  │  Landlock: workdir RWX, rootfs RO, ConnectTCP:[443,2375,2376]    │    │
 │  │  cap-drop=ALL, no-new-privileges, read-only rootfs               │    │
 │  │                                                                  │    │
@@ -390,12 +390,12 @@ correlation with audit events.
 
 ### Seccomp profiles
 
-Two profiles exist. The **sidecar profile** (~84 blocked syscalls) is a
+Two profiles exist. The **sidecar profile** (~85 blocked syscalls) is a
 denylist that blocks what the container engine never needs while allowing
 mount, bpf, ptrace, and clone for podman. The kernel inherits it to all
 child processes.
 
-The **workload profile** (~132 blocked syscalls) is stricter, applied to
+The **workload profile** (~133 blocked syscalls) is stricter, applied to
 the agent, proxy, and nested containers. It blocks container escape
 primitives (mount/umount/setns/pivot_root/chroot), the new mount API,
 device creation, kernel exploit primitives (io_uring, bpf, userfaultfd,
@@ -406,6 +406,8 @@ hardware I/O, time manipulation, SysV IPC, POSIX message queues
 (CVE-2017-11176 class), terminal injection (TIOCSTI/TIOCLINUX/TIOCSETD),
 SIOCATMARK (CVE-2025-38236), MSG_OOB arg-filtered on send*/recv*
 (CVE-2025-38236), MAP_GROWSDOWN (CVE-2023-3269 StackRot class),
+prctl(PR_SET_DUMPABLE) arg-filtered (prevents core dump re-enable),
+prctl(PR_SET_PTRACER) (prevents Yama ptrace_scope bypass),
 and socket families >= 17. For nested containers it layers on
 top of the sidecar profile.
 
