@@ -27,8 +27,8 @@ clampdown runs three container types with different privilege levels:
 |---|---|---|---|
 | Purpose | Container runtime + firewall | AI agent process | Tools the agent spawns |
 | Base image | `FROM scratch` (no shell, no libc) | Alpine | User-chosen |
-| Capabilities | 17 (`SYS_ADMIN`, `NET_ADMIN`, ...) | 0 (`cap-drop=ALL`) | 10 default (effective set empty) |
-| Seccomp | ~70 blocked | ~115 blocked | ~115 blocked + inherited sidecar |
+| Capabilities | 16 (`SYS_ADMIN`, `NET_ADMIN`, ...) | 0 (`cap-drop=ALL`) | 10 default (effective set empty) |
+| Seccomp | ~84 blocked | ~132 blocked | ~132 blocked + inherited sidecar |
 | Landlock | No (incompatible with `mount()`) | workdir RW, rootfs RO | Derived from bind mounts |
 | Secrets | Registry credentials (opt-in) | None (`sk-proxy` dummy key) | None |
 | Network egress | N/A | Deny + allowlist only | Allow, private CIDRs blocked |
@@ -74,7 +74,7 @@ kernel-enforced walls as one following instructions. That's the point.
 ### Nested container enforcement
 
 The agent runs inside a zero-capability container: `cap-drop=ALL`, read-only rootfs,
-`no-new-privileges`, and a seccomp profile that blocks ~115 syscalls including all
+`no-new-privileges`, and a seccomp profile that blocks ~132 syscalls including all
 known kernel exploit primitives (io_uring, userfaultfd, BPF, perf_event, splice/tee).
 When the agent needs to run a tool — a compiler, a test runner, a shell command — it
 sends a `podman run` request to the sidecar's API socket. The sidecar intercepts every
@@ -313,6 +313,26 @@ clampdown delete -s <session-id>
 # Remove all cached container storage for the current project
 clampdown prune
 ```
+
+---
+
+## Audit log
+
+Every session produces an audit trail covering API requests, OCI hook decisions,
+firewall changes, session lifecycle, tripwire events, and image pushes. Events use
+a `clampdown:` prefix with RFC3339 timestamps.
+
+```sh
+# View audit events from a running session (merged, sorted)
+clampdown logs -s <session-id>
+
+# Include the full agent conversation (large)
+clampdown logs -s <session-id> --dump-agent-conversation
+```
+
+The audit log is persisted to `~/.cache/clampdown/<project>/state/audit-<session>.log`
+when the session ends. This file survives `clampdown delete` (container removal) —
+only `clampdown prune` removes it.
 
 ---
 

@@ -255,15 +255,6 @@
       "errnoRet": 1,
       "comment": "Block READ_IMPLIES_EXEC, ASLR disable, etc. Allow only PER_LINUX (0), UNAME26 (8), ADDR_LIMIT_3GB (131072/131080), and QUERY (0xFFFFFFFF). Matches default seccomp profile."
     },
-    {
-      "names": ["mmap", "mmap2", "mprotect", "pkey_mprotect"],
-      "action": "SCMP_ACT_ERRNO",
-      "errnoRet": 1,
-      "args": [
-        { "index": 2, "value": 6, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 6 }
-      ],
-      "comment": "W^X enforcement: block simultaneous PROT_WRITE|PROT_EXEC (0x2|0x4). Sidecar runs static Go binaries — no JIT, no RWX needed. Inherited by nested containers."
-    },
 
     {
       "names": ["socket"],
