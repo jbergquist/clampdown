@@ -53,21 +53,46 @@ func List(ctx context.Context, rt container.Runtime) ([]Session, error) {
 	return sessions, nil
 }
 
+// Container identifies a container in a session by name and role.
+type Container struct {
+	Name string
+	Role string // "sidecar", "proxy", or agent name
+}
+
+// FindContainers returns all containers in a session with their roles.
+func FindContainers(ctx context.Context, rt container.Runtime, sessionID string) ([]Container, error) {
+	infos, err := rt.List(ctx, map[string]string{
+		"clampdown":         sandbox.AppName,
+		"clampdown.session": sessionID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(infos) == 0 {
+		return nil, fmt.Errorf("no containers found for session %s", sessionID)
+	}
+	ctrs := make([]Container, len(infos))
+	for i, info := range infos {
+		ctrs[i] = Container{
+			Name: info.Name,
+			Role: info.Labels["clampdown.role"],
+		}
+	}
+	return ctrs, nil
+}
+
 // FindSidecar resolves a session ID to a sidecar container name.
 func FindSidecar(ctx context.Context, rt container.Runtime, sessionID string) (string, error) {
-	labels := map[string]string{
-		"clampdown":         sandbox.AppName,
-		"clampdown.role":    "sidecar",
-		"clampdown.session": sessionID,
-	}
-	infos, err := rt.List(ctx, labels)
+	ctrs, err := FindContainers(ctx, rt, sessionID)
 	if err != nil {
 		return "", err
 	}
-	if len(infos) == 0 {
-		return "", fmt.Errorf("no running session %s found", sessionID)
+	for _, c := range ctrs {
+		if c.Role == "sidecar" {
+			return c.Name, nil
+		}
 	}
-	return infos[0].Name, nil
+	return "", fmt.Errorf("no running session %s found", sessionID)
 }
 
 // Delete stops and removes all containers for a session.
