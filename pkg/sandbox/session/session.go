@@ -25,7 +25,7 @@ type Session struct {
 	Workdir     string
 }
 
-// List returns all running sandbox sessions.
+// List returns all sandbox sessions (running and stopped).
 func List(ctx context.Context, rt container.Runtime) ([]Session, error) {
 	infos, err := rt.List(ctx, map[string]string{
 		"clampdown":      sandbox.AppName,
@@ -137,7 +137,7 @@ func Delete(ctx context.Context, rt container.Runtime, sessionID string) error {
 // Print writes a formatted session table to stderr.
 func Print(sessions []Session) {
 	if len(sessions) == 0 {
-		fmt.Fprintln(os.Stderr, "No running sessions.")
+		fmt.Fprintln(os.Stderr, "No sessions.")
 		return
 	}
 	w := tabwriter.NewWriter(os.Stderr, 0, 0, 2, ' ', 0)

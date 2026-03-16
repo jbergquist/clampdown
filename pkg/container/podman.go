@@ -254,7 +254,7 @@ func (p *Podman) ExecStdin(
 }
 
 func (p *Podman) List(ctx context.Context, labels map[string]string) ([]Info, error) {
-	args := []string{"ps", "--format", "json"}
+	args := []string{"ps", "--all", "--format", "json"}
 	for k, v := range labels {
 		args = append(args, "--filter", "label="+k+"="+v)
 	}
@@ -328,6 +328,19 @@ func (p *Podman) CleanStale(ctx context.Context, prefix string) {
 			_ = rm.Run()
 		}
 	}
+}
+
+func (p *Podman) Stop(ctx context.Context, names ...string) error {
+	var hasErrored error
+	for _, name := range names {
+		cmd := exec.CommandContext(ctx, p.bin(), "stop", "-t", "5", name)
+		slog.Debug("exec", "cmd", cmd.Args)
+		err := cmd.Run()
+		if err != nil && hasErrored == nil {
+			hasErrored = err
+		}
+	}
+	return hasErrored
 }
 
 func (p *Podman) Remove(ctx context.Context, names ...string) error {

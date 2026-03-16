@@ -35,23 +35,23 @@ const (
 
 // Options configures a sandbox run.
 type Options struct {
-	AgentAllow      string
-	AgentArgs       []string
-	AgentPolicy     string
-	AllowHooks      bool
-	CPUs            string
-	EnableTripwire  bool
-	GH              bool
-	MaskPaths       []string
-	GitConfig       bool
-	Memory          string
-	PodPolicy       string
-	ProtectPaths    []string
-	RegistryAuth    bool
-	RequireDigest   string
-	SSH             bool
-	UnmaskPaths     []string
-	Workdir         string
+	AgentAllow     string
+	AgentArgs      []string
+	AgentPolicy    string
+	AllowHooks     bool
+	CPUs           string
+	EnableTripwire bool
+	GH             bool
+	MaskPaths      []string
+	GitConfig      bool
+	Memory         string
+	PodPolicy      string
+	ProtectPaths   []string
+	RegistryAuth   bool
+	RequireDigest  string
+	SSH            bool
+	UnmaskPaths    []string
+	Workdir        string
 }
 
 // errTamper is returned when the watcher detects modification of a
@@ -340,14 +340,14 @@ func waitReady(ctx context.Context, rt container.Runtime, sidecar string) error 
 
 func cleanup(once *sync.Once, rt container.Runtime, agentName, proxyName, sidecar string, created []string) {
 	once.Do(func() {
-		// Remove order: agent → proxy → sidecar.
+		// Stop order: agent → proxy → sidecar.
 		// Agent depends on sidecar's network namespace; proxy does too.
 		names := []string{agentName}
 		if proxyName != "" {
 			names = append(names, proxyName)
 		}
 		names = append(names, sidecar)
-		_ = rt.Remove(context.Background(), names...)
+		_ = rt.Stop(context.Background(), names...)
 		for _, p := range created {
 			_ = os.RemoveAll(p)
 		}

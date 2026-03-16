@@ -258,7 +258,7 @@ func (d *Docker) ExecStdin(
 }
 
 func (d *Docker) List(ctx context.Context, labels map[string]string) ([]Info, error) {
-	args := []string{"ps", "--format", "json"}
+	args := []string{"ps", "--all", "--format", "json"}
 	for k, v := range labels {
 		args = append(args, "--filter", "label="+k+"="+v)
 	}
@@ -351,6 +351,19 @@ func (d *Docker) CleanStale(ctx context.Context, prefix string) {
 			_ = rm.Run()
 		}
 	}
+}
+
+func (d *Docker) Stop(ctx context.Context, names ...string) error {
+	var hasErrored error
+	for _, name := range names {
+		cmd := exec.CommandContext(ctx, d.bin(), "stop", "-t", "5", name)
+		slog.Debug("exec", "cmd", cmd.Args)
+		err := cmd.Run()
+		if err != nil && hasErrored == nil {
+			hasErrored = err
+		}
+	}
+	return hasErrored
 }
 
 func (d *Docker) Remove(ctx context.Context, names ...string) error {
