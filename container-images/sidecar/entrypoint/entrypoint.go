@@ -255,11 +255,11 @@ func bootstrapFirewall() error {
 
 // buildAgentChain configures filter/OUTPUT for agent egress.
 //
-// deny mode: loopback → established → private CIDRs DROP → DNS ACCEPT →
+// deny mode: loopback → established → private CIDRs REJECT → DNS ACCEPT →
 //
-//	static TCP 443 per-IP → AGENT_ALLOW → DROP
+//	static TCP 443 per-IP → AGENT_ALLOW → REJECT
 //
-// allow mode: loopback → established → AGENT_ALLOW → private CIDRs DROP →
+// allow mode: loopback → established → AGENT_ALLOW → private CIDRs REJECT →
 //
 //	AGENT_BLOCK → ACCEPT
 func buildAgentChain(bin, policy string, staticIPs []string) error {
@@ -286,9 +286,17 @@ func buildAgentChain(bin, policy string, staticIPs []string) error {
 		return fmt.Errorf("established: %w", err)
 	}
 
+	// REJECT gives the agent immediate "connection refused" instead of
+	// a timeout. IPv4 and IPv6 use different ICMP types.
+	rejectType := "icmp-port-unreachable"
+	if strings.Contains(bin, "ip6") {
+		rejectType = "icmp6-port-unreachable"
+	}
+
 	if policy == "deny" {
 		for _, cidr := range privateRanges(bin) {
-			err = iptRun(bin, "-A", "OUTPUT", "!", "-o", "lo", "-d", cidr, "-j", "DROP")
+			err = iptRun(bin, "-A", "OUTPUT", "!", "-o", "lo", "-d", cidr,
+				"-j", "REJECT", "--reject-with", rejectType)
 			if err != nil {
 				return fmt.Errorf("private %s: %w", cidr, err)
 			}
@@ -324,9 +332,9 @@ func buildAgentChain(bin, policy string, staticIPs []string) error {
 		if err != nil {
 			return fmt.Errorf("jump %s: %w", chainAgentAllow, err)
 		}
-		err = iptRun(bin, "-A", "OUTPUT", "-j", "DROP")
+		err = iptRun(bin, "-A", "OUTPUT", "-j", "REJECT", "--reject-with", rejectType)
 		if err != nil {
-			return fmt.Errorf("terminal drop: %w", err)
+			return fmt.Errorf("terminal reject: %w", err)
 		}
 
 		return nil
@@ -337,7 +345,8 @@ func buildAgentChain(bin, policy string, staticIPs []string) error {
 		return fmt.Errorf("jump %s: %w", chainAgentAllow, err)
 	}
 	for _, cidr := range privateRanges(bin) {
-		err = iptRun(bin, "-A", "OUTPUT", "!", "-o", "lo", "-d", cidr, "-j", "DROP")
+		err = iptRun(bin, "-A", "OUTPUT", "!", "-o", "lo", "-d", cidr,
+			"-j", "REJECT", "--reject-with", rejectType)
 		if err != nil {
 			return fmt.Errorf("private %s: %w", cidr, err)
 		}

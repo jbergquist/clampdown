@@ -25,9 +25,10 @@ func AgentAllow(ctx context.Context, rt container.Runtime, sidecar string, targe
 	return modifyChain(ctx, rt, sidecar, "filter", chainAgentAllow, "ACCEPT", targets, ports)
 }
 
-// AgentBlock adds DROP rules to AGENT_BLOCK (filter table).
+// AgentBlock adds REJECT rules to AGENT_BLOCK (filter table).
+// REJECT gives the agent immediate "connection refused" instead of a timeout.
 func AgentBlock(ctx context.Context, rt container.Runtime, sidecar string, targets []string, ports string) error {
-	return modifyChain(ctx, rt, sidecar, "filter", chainAgentBlock, "DROP", targets, ports)
+	return modifyChain(ctx, rt, sidecar, "filter", chainAgentBlock, "REJECT", targets, ports)
 }
 
 // PodAllow adds ACCEPT rules to POD_ALLOW (mangle table).
@@ -149,7 +150,15 @@ func iptExec(
 	} else {
 		args = append(args, "-p", "tcp", "-m", "multiport", "--dports", ports)
 	}
-	args = append(args, "-j", verdict)
+	if verdict == "REJECT" {
+		rejectType := "icmp-port-unreachable"
+		if strings.Contains(bin, "ip6") {
+			rejectType = "icmp6-port-unreachable"
+		}
+		args = append(args, "-j", "REJECT", "--reject-with", rejectType)
+	} else {
+		args = append(args, "-j", verdict)
+	}
 	_, err := rt.Exec(ctx, sidecar, args, nil)
 	return err
 }
