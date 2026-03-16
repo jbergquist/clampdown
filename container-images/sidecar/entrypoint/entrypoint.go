@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,10 +12,8 @@ import (
 )
 
 const (
-	chainAgentAllow = "AGENT_ALLOW"
-	chainAgentBlock = "AGENT_BLOCK"
-	chainPodAllow   = "POD_ALLOW"
-	chainPodBlock   = "POD_BLOCK"
+	iptables  = "/usr/sbin/iptables"
+	ip6tables = "/usr/sbin/ip6tables"
 )
 
 func fatalf(format string, args ...any) {
@@ -41,84 +38,6 @@ func iptRun(bin string, args ...string) error {
 	cmd := exec.CommandContext(context.Background(), bin, args...)
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
-}
-
-// iptRunQuiet executes an iptables command, ignoring errors and
-// suppressing output. Used for operations that are expected to fail
-// (e.g., flushing a chain that doesn't exist yet on first boot).
-func iptRunQuiet(bin string, args ...string) error {
-	return exec.CommandContext(context.Background(), bin, args...).Run()
-}
-
-// classifyIPs splits a list of IP/CIDR entries into IPv4 and IPv6 buckets.
-func classifyIPs(entries []string) ([]string, []string) {
-	var ip4s, ip6s []string
-	seen := make(map[string]bool)
-	for _, entry := range entries {
-		if seen[entry] {
-			continue
-		}
-		seen[entry] = true
-
-		// CIDR.
-		if strings.Contains(entry, "/") {
-			_, ipNet, err := net.ParseCIDR(entry)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "firewall: warning: bad CIDR %s\n", entry)
-				continue
-			}
-			if ipNet.IP.To4() != nil {
-				ip4s = append(ip4s, ipNet.String())
-			} else {
-				ip6s = append(ip6s, ipNet.String())
-			}
-			continue
-		}
-		// Bare IP.
-		ip := net.ParseIP(entry)
-		if ip == nil {
-			fmt.Fprintf(os.Stderr, "firewall: warning: skipping non-IP entry %s\n", entry)
-			continue
-		}
-		if ip.To4() != nil {
-			ip4s = append(ip4s, entry)
-		} else {
-			ip6s = append(ip6s, entry)
-		}
-	}
-	return ip4s, ip6s
-}
-
-// privateRanges returns CIDRs to block for the given iptables binary.
-// Prevents LAN scanning, cloud metadata theft, and local network attacks.
-func privateRanges(bin string) []string {
-	if strings.Contains(bin, "ip6") {
-		return []string{
-			"::1/128",
-			"fc00::/7",
-			"fe80::/10",
-		}
-	}
-	return []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"127.0.0.0/8",
-		"169.254.0.0/16",
-	}
-}
-
-// ensureChain flushes and recreates a user-defined chain. Flush and delete
-// fail on first run (chain doesn't exist yet) — that's expected, so
-// stderr is suppressed for those calls. Create must succeed.
-func ensureChain(bin, table, chain string) error {
-	_ = iptRunQuiet(bin, "-t", table, "-F", chain)
-	_ = iptRunQuiet(bin, "-t", table, "-X", chain)
-	err := iptRun(bin, "-t", table, "-N", chain)
-	if err != nil {
-		return fmt.Errorf("%s create chain %s/%s: %w", bin, table, chain, err)
-	}
-	return nil
 }
 
 // bootstrapCgroups prepares the cgroup v2 hierarchy for nested container use.
@@ -201,242 +120,55 @@ func bootstrapCgroups() error {
 	return nil
 }
 
-// bootstrapFirewall sets up iptables rules for both agent and pod policies.
-//
-// Agent policy (filter/OUTPUT): controls agent/sidecar egress.
-// Pod policy (mangle/FORWARD): controls nested container egress.
-//
-// Each policy can be "allow" (default accept, block specific) or "deny"
-// (default drop, allow specific). Agent defaults to deny, pod defaults to allow.
+// bootstrapFirewall sets a default-deny baseline. OUTPUT gets REJECT
+// (immediate failure), FORWARD gets DROP. Only loopback and established
+// connections are allowed. The launcher applies the full ruleset
+// (agent allowlist, pod chains) after the sidecar API is ready.
 func bootstrapFirewall() error {
-	agentPolicy := os.Getenv("SANDBOX_AGENT_POLICY")
-	if agentPolicy == "" {
-		agentPolicy = "deny"
-	}
-	podPolicy := os.Getenv("SANDBOX_POD_POLICY")
-	if podPolicy == "" {
-		podPolicy = "allow"
-	}
-
-	var agentIPs []string
-	allow := os.Getenv("SANDBOX_AGENT_ALLOW")
-	if allow != "" {
-		for e := range strings.SplitSeq(allow, ",") {
-			e = strings.TrimSpace(e)
-			if e != "" {
-				agentIPs = append(agentIPs, e)
-			}
+	for _, bin := range []string{iptables, ip6tables} {
+		rejectType := "icmp-port-unreachable"
+		if bin == ip6tables {
+			rejectType = "icmp6-port-unreachable"
 		}
-	}
 
-	ip4s, ip6s := classifyIPs(agentIPs)
-
-	for _, bin := range []string{"/usr/sbin/iptables", "/usr/sbin/ip6tables"} {
-		var dests []string
-		if strings.Contains(bin, "ip6") {
-			dests = ip6s
-		} else {
-			dests = ip4s
-		}
-		err := buildAgentChain(bin, agentPolicy, dests)
+		// filter/OUTPUT: REJECT all, allow loopback + established.
+		err := iptRun(bin, "-F", "OUTPUT")
 		if err != nil {
-			return fmt.Errorf("agent chain (%s): %w", bin, err)
+			return fmt.Errorf("%s flush OUTPUT: %w", bin, err)
 		}
-		err = buildPodChain(bin, podPolicy)
+		err = iptRun(bin, "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT")
 		if err != nil {
-			return fmt.Errorf("pod chain (%s): %w", bin, err)
+			return fmt.Errorf("%s loopback: %w", bin, err)
 		}
-	}
-
-	fmt.Fprintf(os.Stderr, "firewall: agent=%s (%d IPv4, %d IPv6), pod=%s\n",
-		agentPolicy, len(ip4s), len(ip6s), podPolicy)
-	return nil
-}
-
-// buildAgentChain configures filter/OUTPUT for agent egress.
-//
-// deny mode: loopback → established → private CIDRs REJECT → DNS ACCEPT →
-//
-//	static TCP 443 per-IP → AGENT_ALLOW → REJECT
-//
-// allow mode: loopback → established → AGENT_ALLOW → private CIDRs REJECT →
-//
-//	AGENT_BLOCK → ACCEPT
-func buildAgentChain(bin, policy string, staticIPs []string) error {
-	err := ensureChain(bin, "filter", chainAgentAllow)
-	if err != nil {
-		return err
-	}
-	err = ensureChain(bin, "filter", chainAgentBlock)
-	if err != nil {
-		return err
-	}
-
-	err = iptRun(bin, "-F", "OUTPUT")
-	if err != nil {
-		return fmt.Errorf("flush OUTPUT: %w", err)
-	}
-
-	err = iptRun(bin, "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT")
-	if err != nil {
-		return fmt.Errorf("loopback: %w", err)
-	}
-	err = iptRun(bin, "-A", "OUTPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT")
-	if err != nil {
-		return fmt.Errorf("established: %w", err)
-	}
-
-	// REJECT gives the agent immediate "connection refused" instead of
-	// a timeout. IPv4 and IPv6 use different ICMP types.
-	rejectType := "icmp-port-unreachable"
-	if strings.Contains(bin, "ip6") {
-		rejectType = "icmp6-port-unreachable"
-	}
-
-	if policy == "deny" {
-		for _, cidr := range privateRanges(bin) {
-			err = iptRun(bin, "-A", "OUTPUT", "!", "-o", "lo", "-d", cidr,
-				"-j", "REJECT", "--reject-with", rejectType)
-			if err != nil {
-				return fmt.Errorf("private %s: %w", cidr, err)
-			}
-		}
-		// DNS (port 53) is always allowed, enabling DNS tunneling
-		// for data exfiltration (dnscat2, iodine). Rate limiting mitigates but
-		// does not eliminate the risk.
-		err = iptRun(bin, "-A", "OUTPUT", "-p", "udp", "--dport", "53",
-			"-m", "limit", "--limit", "10/s", "--limit-burst", "20", "-j", "ACCEPT")
+		err = iptRun(bin, "-A", "OUTPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT")
 		if err != nil {
-			return fmt.Errorf("dns udp: %w", err)
-		}
-		err = iptRun(bin, "-A", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "DROP")
-		if err != nil {
-			return fmt.Errorf("dns udp drop: %w", err)
-		}
-		err = iptRun(bin, "-A", "OUTPUT", "-p", "tcp", "--dport", "53",
-			"-m", "limit", "--limit", "10/s", "--limit-burst", "20", "-j", "ACCEPT")
-		if err != nil {
-			return fmt.Errorf("dns tcp: %w", err)
-		}
-		err = iptRun(bin, "-A", "OUTPUT", "-p", "tcp", "--dport", "53", "-j", "DROP")
-		if err != nil {
-			return fmt.Errorf("dns tcp drop: %w", err)
-		}
-		for _, dest := range staticIPs {
-			err = iptRun(bin, "-A", "OUTPUT", "-p", "tcp", "--dport", "443", "-d", dest, "-j", "ACCEPT")
-			if err != nil {
-				return fmt.Errorf("allow %s: %w", dest, err)
-			}
-		}
-		err = iptRun(bin, "-A", "OUTPUT", "-j", chainAgentAllow)
-		if err != nil {
-			return fmt.Errorf("jump %s: %w", chainAgentAllow, err)
+			return fmt.Errorf("%s established: %w", bin, err)
 		}
 		err = iptRun(bin, "-A", "OUTPUT", "-j", "REJECT", "--reject-with", rejectType)
 		if err != nil {
-			return fmt.Errorf("terminal reject: %w", err)
+			return fmt.Errorf("%s terminal reject: %w", bin, err)
 		}
 
-		return nil
-	}
-
-	err = iptRun(bin, "-A", "OUTPUT", "-j", chainAgentAllow)
-	if err != nil {
-		return fmt.Errorf("jump %s: %w", chainAgentAllow, err)
-	}
-	for _, cidr := range privateRanges(bin) {
-		err = iptRun(bin, "-A", "OUTPUT", "!", "-o", "lo", "-d", cidr,
-			"-j", "REJECT", "--reject-with", rejectType)
+		// mangle/FORWARD: DROP all, allow loopback + established.
+		err = iptRun(bin, "-t", "mangle", "-F", "FORWARD")
 		if err != nil {
-			return fmt.Errorf("private %s: %w", cidr, err)
+			return fmt.Errorf("%s flush FORWARD: %w", bin, err)
 		}
-	}
-	err = iptRun(bin, "-A", "OUTPUT", "-j", chainAgentBlock)
-	if err != nil {
-		return fmt.Errorf("jump %s: %w", chainAgentBlock, err)
-	}
-	err = iptRun(bin, "-A", "OUTPUT", "-j", "ACCEPT")
-	if err != nil {
-		return fmt.Errorf("terminal accept: %w", err)
-	}
-
-	return nil
-}
-
-// buildPodChain configures mangle/FORWARD for nested container egress.
-//
-// allow mode: established → loopback → POD_ALLOW → private CIDRs DROP →
-//
-//	POD_BLOCK → ACCEPT
-//
-// deny mode: established → loopback → DNS ACCEPT → POD_ALLOW → DROP.
-func buildPodChain(bin, policy string) error {
-	err := ensureChain(bin, "mangle", chainPodAllow)
-	if err != nil {
-		return err
-	}
-	err = ensureChain(bin, "mangle", chainPodBlock)
-	if err != nil {
-		return err
-	}
-
-	err = iptRun(bin, "-t", "mangle", "-F", "FORWARD")
-	if err != nil {
-		return fmt.Errorf("flush FORWARD: %w", err)
-	}
-
-	err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT")
-	if err != nil {
-		return fmt.Errorf("established: %w", err)
-	}
-	err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-o", "lo", "-j", "ACCEPT")
-	if err != nil {
-		return fmt.Errorf("loopback: %w", err)
-	}
-
-	if policy == "allow" {
-		err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-j", chainPodAllow)
+		err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT")
 		if err != nil {
-			return fmt.Errorf("jump %s: %w", chainPodAllow, err)
+			return fmt.Errorf("%s FORWARD established: %w", bin, err)
 		}
-		for _, cidr := range privateRanges(bin) {
-			err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "!", "-o", "lo", "-d", cidr, "-j", "DROP")
-			if err != nil {
-				return fmt.Errorf("private %s: %w", cidr, err)
-			}
-		}
-		err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-j", chainPodBlock)
+		err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-o", "lo", "-j", "ACCEPT")
 		if err != nil {
-			return fmt.Errorf("jump %s: %w", chainPodBlock, err)
+			return fmt.Errorf("%s FORWARD loopback: %w", bin, err)
 		}
-		err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-j", "ACCEPT")
+		err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-j", "DROP")
 		if err != nil {
-			return fmt.Errorf("terminal accept: %w", err)
+			return fmt.Errorf("%s FORWARD terminal drop: %w", bin, err)
 		}
-
-		return nil
 	}
 
-	err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-p", "udp", "--dport", "53", "-j", "ACCEPT")
-	if err != nil {
-		return fmt.Errorf("dns udp: %w", err)
-	}
-	err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-p", "tcp", "--dport", "53", "-j", "ACCEPT")
-	if err != nil {
-		return fmt.Errorf("dns tcp: %w", err)
-	}
-	err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-j", chainPodAllow)
-	if err != nil {
-		return fmt.Errorf("jump %s: %w", chainPodAllow, err)
-	}
-	// Terminal DROP covers all remaining traffic, including private CIDRs.
-	// In allow mode, private CIDRs are blocked explicitly before the terminal
-	// ACCEPT; here they are implicitly covered by this DROP — same effect.
-	err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-j", "DROP")
-	if err != nil {
-		return fmt.Errorf("terminal drop: %w", err)
-	}
-
+	fmt.Fprintln(os.Stderr, "firewall: baseline deny-all set")
 	return nil
 }
 

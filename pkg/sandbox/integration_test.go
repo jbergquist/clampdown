@@ -245,7 +245,6 @@ func runTests(m *testing.M) (code int) {
 	}
 
 	resolved := network.ResolveAllowlist(container.RegistryDomains)
-	allowlist := strings.Join(resolved, ",")
 
 	uid := strconv.Itoa(os.Getuid())
 	gid := strconv.Itoa(os.Getgid())
@@ -319,18 +318,12 @@ func runTests(m *testing.M) (code int) {
 	integSidecar = fmt.Sprintf("clampdown-integ-%d-integ", pid)
 
 	defaultEnv := map[string]string{
-		"SANDBOX_AGENT_ALLOW":    allowlist,
-		"SANDBOX_AGENT_POLICY":   "deny",
-		"SANDBOX_POD_POLICY":     "allow",
 		"SANDBOX_REQUIRE_DIGEST": "warn",
 		"SANDBOX_UID":            uid,
 		"SANDBOX_GID":            gid,
 		"SANDBOX_WORKDIR":        workdir,
 	}
 	digestEnv := map[string]string{
-		"SANDBOX_AGENT_ALLOW":    allowlist,
-		"SANDBOX_AGENT_POLICY":   "deny",
-		"SANDBOX_POD_POLICY":     "allow",
 		"SANDBOX_REQUIRE_DIGEST": "block",
 		"SANDBOX_UID":            uid,
 		"SANDBOX_GID":            gid,
@@ -341,9 +334,6 @@ func runTests(m *testing.M) (code int) {
 	cfgDigest := buildSidecarConfig(digestSidecar, sidecarSeccomp, pathsDigest, workdirDigest, digestEnv)
 
 	integEnv := map[string]string{
-		"SANDBOX_AGENT_ALLOW":    allowlist,
-		"SANDBOX_AGENT_POLICY":   "deny",
-		"SANDBOX_POD_POLICY":     "allow",
 		"SANDBOX_REQUIRE_DIGEST": "warn",
 		"SANDBOX_UID":            uid,
 		"SANDBOX_GID":            gid,
@@ -386,6 +376,20 @@ func runTests(m *testing.M) (code int) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "integ sidecar not ready: %v\n", err)
 		return 1
+	}
+
+	// Build firewall rulesets — the entrypoint only sets deny-all baseline.
+	for _, sc := range []string{sidecarName, digestSidecar, integSidecar} {
+		err = network.BuildAgentFirewall(ctx, rt, sc, "deny", resolved)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent firewall %s: %v\n", sc, err)
+			return 1
+		}
+		err = network.BuildPodFirewall(ctx, rt, sc, "allow")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pod firewall %s: %v\n", sc, err)
+			return 1
+		}
 	}
 
 	// Push alpine from the host into all sidecars so tests don't

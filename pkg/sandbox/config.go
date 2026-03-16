@@ -85,9 +85,6 @@ func sidecarConfig(
 		SeccompProfile: seccompPath,
 		Resources:      container.Resources{Memory: opts.Memory, CPUs: opts.CPUs, PIDLimit: sidecarPIDLimit},
 		Env: map[string]string{
-			"SANDBOX_AGENT_ALLOW":    agentAllowlist(ag, opts.AgentAllow),
-			"SANDBOX_AGENT_POLICY":   opts.AgentPolicy,
-			"SANDBOX_POD_POLICY":     opts.PodPolicy,
 			"SANDBOX_REQUIRE_DIGEST": opts.RequireDigest,
 			"SANDBOX_UID":            strconv.Itoa(os.Getuid()),
 			"SANDBOX_GID":            strconv.Itoa(os.Getgid()),
@@ -192,7 +189,7 @@ func AgentLandlockPolicy(
 	return string(data)
 }
 
-func agentAllowlist(ag agent.Agent, extra string) string {
+func agentAllowIPs(ag agent.Agent, extra string) []string {
 	var domains []string
 	domains = append(domains, container.RegistryDomains...)
 	domains = append(domains, ag.EgressDomains()...)
@@ -204,9 +201,7 @@ func agentAllowlist(ag agent.Agent, extra string) string {
 			}
 		}
 	}
-
-	resolved := network.ResolveAllowlist(domains)
-	return strings.Join(resolved, ",")
+	return network.ResolveAllowlist(domains)
 }
 
 // findAuthFile returns the first existing registry auth file on the host.

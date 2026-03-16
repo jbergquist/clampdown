@@ -243,6 +243,16 @@ func (p *Podman) Exec(
 	return c.CombinedOutput()
 }
 
+func (p *Podman) ExecStdin(
+	ctx context.Context, ctr string, cmd []string, stdin []byte,
+) ([]byte, error) {
+	args := append([]string{"exec", "-i", ctr}, cmd...)
+	c := exec.CommandContext(ctx, p.bin(), args...)
+	c.Stdin = bytes.NewReader(stdin)
+	slog.Debug("exec-stdin", "cmd", c.Args)
+	return c.CombinedOutput()
+}
+
 func (p *Podman) List(ctx context.Context, labels map[string]string) ([]Info, error) {
 	args := []string{"ps", "--format", "json"}
 	for k, v := range labels {

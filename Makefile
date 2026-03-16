@@ -44,7 +44,6 @@ test:
 	cd container-images/sidecar/seal && go test -v .
 	cd container-images/sidecar/hooks/createRuntime && go test -v .
 	cd container-images/sidecar/hooks/precreate && go test -v .
-	cd container-images/sidecar/entrypoint && go test -v .
 
 # Integration tests need these images on the host (pushed into sidecar at test start).
 INTEG_IMAGES := alpine python:alpine

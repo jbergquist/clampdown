@@ -12,13 +12,156 @@ import (
 	"github.com/89luca89/clampdown/pkg/container"
 )
 
-// Chain names match those created by the sidecar entrypoint.
 const (
 	chainAgentAllow = "AGENT_ALLOW"
 	chainAgentBlock = "AGENT_BLOCK"
 	chainPodAllow   = "POD_ALLOW"
 	chainPodBlock   = "POD_BLOCK"
+
+	binIPT4 = "/usr/sbin/iptables"
+	binIPT6 = "/usr/sbin/ip6tables"
 )
+
+var privateV4 = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16"}
+var privateV6 = []string{"::1/128", "fc00::/7", "fe80::/10"}
+
+// BuildAgentFirewall creates the full agent OUTPUT chain structure via
+// iptables-restore. Applied atomically in 2 calls (IPv4 + IPv6).
+//
+// deny mode: loopback → established → private CIDRs REJECT → DNS (rate-limited) →
+//
+//	per-IP TCP 443 ACCEPT → AGENT_ALLOW → terminal REJECT
+//
+// allow mode: loopback → established → AGENT_ALLOW → private CIDRs REJECT →
+//
+//	AGENT_BLOCK → terminal ACCEPT
+func BuildAgentFirewall(ctx context.Context, rt container.Runtime, sidecar string, policy string, allowIPs []string) error {
+	ip4s, ip6s := ClassifyIPs(allowIPs)
+
+	for _, bin := range []string{binIPT4, binIPT6} {
+		var dests, privRanges []string
+		rejectType := "icmp-port-unreachable"
+		restoreBin := "/usr/sbin/iptables-restore"
+		if bin == binIPT6 {
+			dests = ip6s
+			privRanges = privateV6
+			rejectType = "icmp6-port-unreachable"
+			restoreBin = "/usr/sbin/ip6tables-restore"
+		} else {
+			dests = ip4s
+			privRanges = privateV4
+		}
+
+		var r ruleBuilder
+		r.table("filter")
+		r.chain(chainAgentAllow, "-")
+		r.chain(chainAgentBlock, "-")
+		r.chain("OUTPUT", "ACCEPT") // policy ACCEPT; rules enforce deny
+		r.flush("OUTPUT")
+		r.add("OUTPUT", "-o lo -j ACCEPT")
+		r.add("OUTPUT", "-m state --state ESTABLISHED,RELATED -j ACCEPT")
+
+		if policy == "deny" {
+			for _, cidr := range privRanges {
+				r.add("OUTPUT", fmt.Sprintf("! -o lo -d %s -j REJECT --reject-with %s", cidr, rejectType))
+			}
+			// DNS rate-limited. Excess DROPped to throttle tunneling.
+			r.add("OUTPUT", "-p udp --dport 53 -m limit --limit 10/s --limit-burst 20 -j ACCEPT")
+			r.add("OUTPUT", "-p udp --dport 53 -j DROP")
+			r.add("OUTPUT", "-p tcp --dport 53 -m limit --limit 10/s --limit-burst 20 -j ACCEPT")
+			r.add("OUTPUT", "-p tcp --dport 53 -j DROP")
+			for _, dest := range dests {
+				r.add("OUTPUT", fmt.Sprintf("-p tcp --dport 443 -d %s -j ACCEPT", dest))
+			}
+			r.add("OUTPUT", fmt.Sprintf("-j %s", chainAgentAllow))
+			r.add("OUTPUT", fmt.Sprintf("-j REJECT --reject-with %s", rejectType))
+		} else {
+			r.add("OUTPUT", fmt.Sprintf("-j %s", chainAgentAllow))
+			for _, cidr := range privRanges {
+				r.add("OUTPUT", fmt.Sprintf("! -o lo -d %s -j REJECT --reject-with %s", cidr, rejectType))
+			}
+			r.add("OUTPUT", fmt.Sprintf("-j %s", chainAgentBlock))
+			r.add("OUTPUT", "-j ACCEPT")
+		}
+		r.commit()
+
+		out, err := rt.ExecStdin(ctx, sidecar, []string{restoreBin, "--noflush"}, r.bytes())
+		if err != nil {
+			return fmt.Errorf("%s restore: %w: %s", restoreBin, err, out)
+		}
+	}
+
+	_ = rt.Log(ctx, sidecar, "firewall",
+		fmt.Sprintf("BUILD agent: policy=%s allow=%s",
+			policy, strings.Join(allowIPs, ",")))
+	slog.Info("agent firewall built", "policy", policy, "ipv4", len(ip4s), "ipv6", len(ip6s))
+	return nil
+}
+
+// BuildPodFirewall creates the full pod FORWARD chain structure via
+// iptables-restore. Applied atomically in 2 calls (IPv4 + IPv6).
+//
+// allow mode: established → loopback → POD_ALLOW → private CIDRs DROP →
+//
+//	POD_BLOCK → ACCEPT
+//
+// deny mode: established → loopback → DNS ACCEPT → POD_ALLOW → DROP.
+func BuildPodFirewall(ctx context.Context, rt container.Runtime, sidecar string, policy string) error {
+	for _, bin := range []string{binIPT4, binIPT6} {
+		var privRanges []string
+		restoreBin := "/usr/sbin/iptables-restore"
+		if bin == binIPT6 {
+			privRanges = privateV6
+			restoreBin = "/usr/sbin/ip6tables-restore"
+		} else {
+			privRanges = privateV4
+		}
+
+		var r ruleBuilder
+		r.table("mangle")
+		r.chain(chainPodAllow, "-")
+		r.chain(chainPodBlock, "-")
+		r.flush("FORWARD")
+		r.add("FORWARD", "-m state --state ESTABLISHED,RELATED -j ACCEPT")
+		r.add("FORWARD", "-o lo -j ACCEPT")
+
+		if policy == "allow" {
+			r.add("FORWARD", fmt.Sprintf("-j %s", chainPodAllow))
+			for _, cidr := range privRanges {
+				r.add("FORWARD", fmt.Sprintf("! -o lo -d %s -j DROP", cidr))
+			}
+			r.add("FORWARD", fmt.Sprintf("-j %s", chainPodBlock))
+			r.add("FORWARD", "-j ACCEPT")
+		} else {
+			r.add("FORWARD", "-p udp --dport 53 -j ACCEPT")
+			r.add("FORWARD", "-p tcp --dport 53 -j ACCEPT")
+			r.add("FORWARD", fmt.Sprintf("-j %s", chainPodAllow))
+			r.add("FORWARD", "-j DROP")
+		}
+		r.commit()
+
+		out, err := rt.ExecStdin(ctx, sidecar, []string{restoreBin, "--noflush"}, r.bytes())
+		if err != nil {
+			return fmt.Errorf("%s restore: %w: %s", restoreBin, err, out)
+		}
+	}
+
+	_ = rt.Log(ctx, sidecar, "firewall", fmt.Sprintf("BUILD pod: policy=%s", policy))
+	slog.Info("pod firewall built", "policy", policy)
+	return nil
+}
+
+// ruleBuilder generates iptables-restore format rules.
+type ruleBuilder struct {
+	buf strings.Builder
+}
+
+func (r *ruleBuilder) table(name string)              { fmt.Fprintf(&r.buf, "*%s\n", name) }
+func (r *ruleBuilder) chain(name, policy string)      { fmt.Fprintf(&r.buf, ":%s %s [0:0]\n", name, policy) }
+func (r *ruleBuilder) flush(chain string)             { fmt.Fprintf(&r.buf, "-F %s\n", chain) }
+func (r *ruleBuilder) add(chain, rule string)         { fmt.Fprintf(&r.buf, "-A %s %s\n", chain, rule) }
+func (r *ruleBuilder) commit()                        { r.buf.WriteString("COMMIT\n") }
+func (r *ruleBuilder) bytes() []byte                  { return []byte(r.buf.String()) }
 
 // AgentAllow adds ACCEPT rules to AGENT_ALLOW (filter table).
 func AgentAllow(ctx context.Context, rt container.Runtime, sidecar string, targets []string, ports string) error {

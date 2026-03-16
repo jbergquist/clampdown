@@ -21,6 +21,7 @@ import (
 	"github.com/89luca89/clampdown/pkg/agent"
 	"github.com/89luca89/clampdown/pkg/container"
 	"github.com/89luca89/clampdown/pkg/sandbox/mounts"
+	"github.com/89luca89/clampdown/pkg/sandbox/network"
 	"github.com/89luca89/clampdown/pkg/sandbox/seccomp"
 	"github.com/89luca89/clampdown/pkg/sandbox/tripwire"
 )
@@ -256,6 +257,19 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 
 	_ = rt.Log(runCtx, sidecarName, "session",
 		fmt.Sprintf("START agent=%s workdir=%s pid=%d", ag.Name(), opts.Workdir, pid))
+
+	// Build the full firewall ruleset now that the sidecar API is up.
+	// The entrypoint set a deny-all baseline; we add the agent allowlist
+	// and pod chains before any untrusted code starts.
+	allowIPs := agentAllowIPs(ag, opts.AgentAllow)
+	err = network.BuildAgentFirewall(runCtx, rt, sidecarName, opts.AgentPolicy, allowIPs)
+	if err != nil {
+		return fmt.Errorf("agent firewall: %w", err)
+	}
+	err = network.BuildPodFirewall(runCtx, rt, sidecarName, opts.PodPolicy)
+	if err != nil {
+		return fmt.Errorf("pod firewall: %w", err)
+	}
 
 	// Start auth proxy if a proxy route is active.
 	if proxyRoute != nil {

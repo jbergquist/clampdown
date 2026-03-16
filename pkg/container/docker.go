@@ -247,6 +247,16 @@ func (d *Docker) Exec(
 	return c.CombinedOutput()
 }
 
+func (d *Docker) ExecStdin(
+	ctx context.Context, ctr string, cmd []string, stdin []byte,
+) ([]byte, error) {
+	args := append([]string{"exec", "-i", ctr}, cmd...)
+	c := exec.CommandContext(ctx, d.bin(), args...)
+	c.Stdin = bytes.NewReader(stdin)
+	slog.Debug("exec-stdin", "cmd", c.Args)
+	return c.CombinedOutput()
+}
+
 func (d *Docker) List(ctx context.Context, labels map[string]string) ([]Info, error) {
 	args := []string{"ps", "--format", "json"}
 	for k, v := range labels {

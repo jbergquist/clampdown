@@ -13,6 +13,7 @@ const SidecarAPI = "tcp://localhost:2375"
 type Runtime interface {
 	CleanStale(ctx context.Context, prefix string)
 	Exec(ctx context.Context, container string, cmd []string, env map[string]string) ([]byte, error)
+	ExecStdin(ctx context.Context, container string, cmd []string, stdin []byte) ([]byte, error)
 	ImageID(ctx context.Context, image string) (string, error)
 	IsRootless(ctx context.Context) (bool, error)
 	List(ctx context.Context, labels map[string]string) ([]Info, error)
