@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
-	"unsafe"
 )
 
 const (
@@ -425,32 +424,6 @@ func buildPodChain(bin, policy string) error {
 	return nil
 }
 
-// setImmutable sets the immutable flag (chattr +i) on a file via ioctl.
-func setImmutable(path string) {
-	const iocGetFlags = 0x80086601 // FS_IOC_GETFLAGS
-	const iocSetFlags = 0x40086602 // FS_IOC_SETFLAGS
-	const immutable = 0x00000010   // FS_IMMUTABLE_FL
-
-	f, err := os.Open(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: chattr +i %s: open: %v\n", path, err)
-		return
-	}
-	defer f.Close()
-
-	var flags int
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), iocGetFlags, uintptr(unsafe.Pointer(&flags)))
-	if errno != 0 {
-		fmt.Fprintf(os.Stderr, "warning: chattr +i %s: getflags: %v\n", path, errno)
-		return
-	}
-	flags |= immutable
-	_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), iocSetFlags, uintptr(unsafe.Pointer(&flags)))
-	if errno != 0 {
-		fmt.Fprintf(os.Stderr, "warning: chattr +i %s: setflags: %v\n", path, errno)
-	}
-}
-
 // writeSandboxIdentity writes the host UID/GID to /run/sandbox/ for OCI
 // hooks to read. After writing, the directory is bind-mounted read-only
 // so an escaped process cannot modify the UID to escalate privileges
@@ -481,15 +454,9 @@ func writeSandboxIdentity() {
 		fmt.Fprintf(os.Stderr, "warning: write %s/gid: %v\n", dir, err)
 	}
 
-	// Make identity files immutable (chattr +i). An attacker who
-	// compromises the sidecar could remount / read-write and bypass
-	// the bind-mount RO protection below, but the immutable flag
-	// requires CAP_LINUX_IMMUTABLE in the init user namespace to
-	// clear — which rootless containers don't have.
-	setImmutable(dir + "/uid")
-	setImmutable(dir + "/gid")
-
-	// Bind-mount the directory read-only as a secondary defense.
+	// Bind-mount the directory read-only so an escaped process
+	// cannot modify the UID to escalate privileges in future
+	// nested containers.
 	err = bindMount(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: bind mount %s: %v\n", dir, err)
