@@ -16,7 +16,7 @@ type Config struct {
 	AgentPolicy     string   `json:"agent_policy"`
 	AllowHooks      bool     `json:"allow_hooks"`
 	CPUs            string   `json:"cpus"`
-	DisableTripwire bool     `json:"disable_tripwire"`
+	EnableTripwire  bool     `json:"tripwire"`
 	GH              bool     `json:"gh"`
 	GitConfig       bool     `json:"gitconfig"`
 	Memory          string   `json:"memory"`

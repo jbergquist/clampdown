@@ -303,8 +303,21 @@ Credentials are opt-in. Nothing is forwarded by default.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--runtime` | auto | Container runtime: `podman`, `docker`, `nerdctl` |
-| `--disable-tripwire` | off | Don't kill session on protected path modification (still restores on exit) |
+| `--tripwire` | off | Kill session on protected path modification (restores on exit either way) |
 | `--log-level` | `info` | `debug`, `info`, `warn`, `error` |
+
+**Tripwire** monitors protected host paths via inotify and kills the session
+immediately if any are modified — the last line of defense against a full
+container escape. It also snapshots files before launch and restores them on
+exit (restoration happens regardless of the flag).
+
+Off by default because IDEs, other terminal sessions, and git operations
+in the same workdir trigger false positives. Enable it for high-security
+use cases where the workdir is not touched by anything else during the session:
+
+```sh
+clampdown claude --tripwire
+```
 
 ---
 

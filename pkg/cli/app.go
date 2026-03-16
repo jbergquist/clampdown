@@ -79,9 +79,9 @@ func Run(args []string) error {
 				Usage:   "Forward host registry credentials to agent (read-only)",
 			},
 			&ucli.BoolFlag{
-				Name:  "disable-tripwire",
-				Value: cfg.DisableTripwire,
-				Usage: "Don't kill session on protected path modification (still restores on exit)",
+				Name:  "tripwire",
+				Value: cfg.EnableTripwire,
+				Usage: "Kill session on protected path modification (off by default; restores on exit either way)",
 			},
 			&ucli.StringFlag{
 				Name:    "agent-policy",
@@ -324,7 +324,7 @@ func runAgent(agName string, cfg Config) ucli.ActionFunc {
 			AgentPolicy:     cmd.String("agent-policy"),
 			AllowHooks:      cmd.Bool("allow-hooks"),
 			CPUs:            cmd.String("cpus"),
-			DisableTripwire: cmd.Bool("disable-tripwire"),
+			EnableTripwire:  cmd.Bool("tripwire"),
 			GH:              cmd.Bool("gh"),
 			GitConfig:       cmd.Bool("gitconfig"),
 			MaskPaths:       append(cfg.MaskPaths, cmd.StringSlice("mask")...),

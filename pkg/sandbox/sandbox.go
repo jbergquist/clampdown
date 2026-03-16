@@ -39,7 +39,7 @@ type Options struct {
 	AgentPolicy     string
 	AllowHooks      bool
 	CPUs            string
-	DisableTripwire bool
+	EnableTripwire  bool
 	GH              bool
 	MaskPaths       []string
 	GitConfig       bool
@@ -175,9 +175,10 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 	// Host-side tripwire: monitors all read-only mount sources on the host
 	// via inotify. Snapshots files before launch, restores on exit.
 	// Any modification kills the session immediately.
-	// Disabled with --disable-tripwire.
+	// Enabled with --tripwire (off by default — false positives from
+	// IDE auto-save, multi-session, and external git operations).
 	var tw *tripwire.Tripwire
-	if !opts.DisableTripwire {
+	if opts.EnableTripwire {
 		var watchErr error
 		tw, watchErr = tripwire.Start(tripwire.HostPaths(mnts), func(path string) {
 			slog.Error("read-only path tampered", "path", path)
