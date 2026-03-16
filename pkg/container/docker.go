@@ -413,9 +413,16 @@ func (d *Docker) PushImage(ctx context.Context, sidecar string, images []string)
 	return loadErr
 }
 
+// Log writes a timestamped message to the container's PID 1 stderr
+// via the /log binary so it appears in `docker logs`.
+func (d *Docker) Log(ctx context.Context, ctr string, source, msg string) error {
+	_, err := d.Exec(ctx, ctr, []string{"/log", source, msg}, nil)
+	return err
+}
+
 func (d *Docker) Logs(ctx context.Context, ctr string) ([]byte, error) {
 	var buf bytes.Buffer
-	cmd := exec.CommandContext(ctx, d.bin(), "logs", ctr)
+	cmd := exec.CommandContext(ctx, d.bin(), "logs", "--timestamps", ctr)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	slog.Debug("exec", "cmd", cmd.Args)

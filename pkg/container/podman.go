@@ -394,9 +394,16 @@ func (p *Podman) PushImage(ctx context.Context, sidecar string, images []string)
 	return loadErr
 }
 
+// Log writes a timestamped message to the container's PID 1 stderr
+// via the /log binary so it appears in `podman logs`.
+func (p *Podman) Log(ctx context.Context, ctr string, source, msg string) error {
+	_, err := p.Exec(ctx, ctr, []string{"/log", source, msg}, nil)
+	return err
+}
+
 func (p *Podman) Logs(ctx context.Context, ctr string) ([]byte, error) {
 	var buf bytes.Buffer
-	cmd := exec.CommandContext(ctx, p.bin(), "logs", ctr)
+	cmd := exec.CommandContext(ctx, p.bin(), "logs", "--timestamps", ctr)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	slog.Debug("exec", "cmd", cmd.Args)

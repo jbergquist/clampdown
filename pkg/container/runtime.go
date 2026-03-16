@@ -16,6 +16,7 @@ type Runtime interface {
 	ImageID(ctx context.Context, image string) (string, error)
 	IsRootless(ctx context.Context) (bool, error)
 	List(ctx context.Context, labels map[string]string) ([]Info, error)
+	Log(ctx context.Context, container string, source, msg string) error
 	Logs(ctx context.Context, container string) ([]byte, error)
 	Name() string
 	Prune(ctx context.Context, projectDir string) error

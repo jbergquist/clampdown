@@ -154,6 +154,19 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 	runCtx, cancelRun := context.WithCancelCause(ctx)
 	defer cancelRun(nil)
 
+	// Audit log: persists after containers are removed.
+	auditPath := filepath.Join(p.State, fmt.Sprintf("audit-%d.log", pid))
+	auditFile, auditErr := os.OpenFile(auditPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if auditErr != nil {
+		return fmt.Errorf("audit log: %w", auditErr)
+	}
+	defer auditFile.Close()
+	auditf := func(format string, args ...any) {
+		ts := time.Now().UTC().Format(time.RFC3339)
+		body := fmt.Sprintf(format, args...)
+		fmt.Fprintf(auditFile, "clampdown: %s launcher: %s\n", ts, body)
+	}
+
 	// Host-side tripwire: monitors all read-only mount sources on the host
 	// via inotify. Snapshots files before launch, restores on exit.
 	// Any modification kills the session immediately.
@@ -163,6 +176,7 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 		var watchErr error
 		tw, watchErr = tripwire.Start(tripwire.HostPaths(mnts), func(path string) {
 			slog.Error("read-only path tampered", "path", path)
+			auditf("TAMPER path=%s", path)
 			cancelRun(fmt.Errorf("tampered: %s", path))
 		})
 		if watchErr != nil {
@@ -202,6 +216,8 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 	go func() {
 		select {
 		case <-sigCh:
+			auditf("SIGNAL")
+			dumpAuditLogs(ctx, rt, auditFile, sidecarName, proxyName)
 			if tw != nil {
 				tw.Stop()
 			}
@@ -231,6 +247,9 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 		return err
 	}
 	slog.Info("container API ready")
+
+	_ = rt.Log(runCtx, sidecarName, "session",
+		fmt.Sprintf("START agent=%s workdir=%s pid=%d", ag.Name(), opts.Workdir, pid))
 
 	// Start auth proxy if a proxy route is active.
 	if proxyRoute != nil {
@@ -263,11 +282,24 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 
 	err = rt.StartAgent(runCtx, agentCfg)
 
+	// Log session end before cleanup removes the sidecar.
+	cause := context.Cause(runCtx)
+	if cause != nil {
+		_ = rt.Log(ctx, sidecarName, "session",
+			fmt.Sprintf("STOP reason=tamper cause=%v", cause))
+	} else {
+		_ = rt.Log(ctx, sidecarName, "session", "STOP reason=agent-exit")
+	}
+
+	// Dump container logs to audit file before cleanup removes them.
+	// Signal path already dumped and exited via os.Exit(1).
+	dumpAuditLogs(ctx, rt, auditFile, sidecarName, proxyName)
+
 	// If the context was cancelled by the watcher, the agent was killed
 	// due to tamper detection. Return a specific error so the caller
 	// knows this wasn't a normal exit. The deferred cleanup runs after
 	// this return: containers removed, permissions restored.
-	if context.Cause(runCtx) != nil {
+	if cause != nil {
 		return errTamper
 	}
 	return err

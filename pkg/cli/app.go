@@ -9,7 +9,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	ucli "github.com/urfave/cli/v3"
 
@@ -156,6 +159,18 @@ func Run(args []string) error {
 				Usage:  "Stop a session and remove its containers and cache",
 				Flags:  []ucli.Flag{sessionFlag()},
 				Action: deleteSession,
+			},
+			&ucli.Command{
+				Name:  "logs",
+				Usage: "Show merged logs from all containers in a session",
+				Flags: []ucli.Flag{
+					sessionFlag(),
+					&ucli.BoolFlag{
+						Name:  "dump-agent-conversation",
+						Usage: "Include raw agent container output (full conversation)",
+					},
+				},
+				Action: showLogs,
 			},
 			&ucli.Command{
 				Name:  "network",
@@ -351,6 +366,72 @@ func deleteSession(ctx context.Context, cmd *ucli.Command) error {
 	return session.Delete(ctx, rt, cmd.String("session"))
 }
 
+func showLogs(ctx context.Context, cmd *ucli.Command) error {
+	rt, err := resolveRuntime(cmd)
+	if err != nil {
+		return err
+	}
+	ctrs, err := session.FindContainers(ctx, rt, cmd.String("session"))
+	if err != nil {
+		return err
+	}
+	dumpAgent := cmd.Bool("dump-agent-conversation")
+	var lines []string
+	for _, ctr := range ctrs {
+		isAgent := ctr.Role != "sidecar" && ctr.Role != "proxy"
+		if isAgent && !dumpAgent {
+			continue
+		}
+		logs, logErr := rt.Logs(ctx, ctr.Name)
+		if logErr != nil {
+			continue
+		}
+		// Logs() returns --timestamps output: each line is prefixed
+		// with an RFC3339Nano timestamp by the container runtime.
+		for line := range strings.SplitSeq(string(logs), "\n") {
+			if line == "" {
+				continue
+			}
+			if isAgent || strings.Contains(line, "clampdown:") {
+				lines = append(lines, line)
+			}
+		}
+	}
+	// Runtime timestamps (RFC3339Nano prefix) make lexicographic
+	// sort produce chronological order across all containers.
+	slices.Sort(lines)
+	for _, line := range lines {
+		stripped := sandbox.StripRuntimeTimestamp(line)
+		if strings.HasPrefix(stripped, "clampdown:") {
+			fmt.Println(stripped)
+		} else {
+			// Agent line: keep runtime timestamp for postmortem
+			// correlation. Strip ANSI escapes, replace control
+			// characters with spaces.
+			clean := sandbox.CleanTerminalLine(line)
+			content := strings.TrimSpace(sandbox.StripRuntimeTimestamp(clean))
+			if !hasAlphanum(content) {
+				continue
+			}
+			if utf8.RuneCountInString(content) < 4 {
+				continue
+			}
+			fmt.Println(clean)
+		}
+	}
+	return nil
+}
+
+// hasAlphanum reports whether s contains at least one letter or digit.
+func hasAlphanum(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
+}
+
 func findSidecar(ctx context.Context, cmd *ucli.Command) (container.Runtime, string, error) {
 	rt, err := resolveRuntime(cmd)
 	if err != nil {
@@ -474,7 +555,14 @@ func imagePush(ctx context.Context, cmd *ucli.Command) error {
 	}
 
 	slog.Info("pushing images", "count", len(needed))
-	return rt.PushImage(ctx, sidecar, needed)
+	err = rt.PushImage(ctx, sidecar, needed)
+	if err != nil {
+		return err
+	}
+	for _, img := range needed {
+		_ = rt.Log(ctx, sidecar, "image", fmt.Sprintf("PUSH %s", img))
+	}
+	return nil
 }
 
 func prune(ctx context.Context, cmd *ucli.Command) error {

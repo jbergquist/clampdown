@@ -9,6 +9,7 @@ PROXY_IMAGE    := clampdown-proxy:latest
 # Go binary sources
 SEAL_SRCS       := container-images/sidecar/seal/seal.go container-images/sidecar/seal/go.mod container-images/sidecar/seal/go.sum
 ENTRYPOINT_SRCS := container-images/sidecar/entrypoint/entrypoint.go container-images/sidecar/entrypoint/go.mod
+LOG_SRCS        := container-images/sidecar/log/log.go container-images/sidecar/log/go.mod
 SECPOL_SRCS     := container-images/sidecar/hooks/createRuntime/security-policy.go container-images/sidecar/hooks/createRuntime/go.mod
 SEALINJ_SRCS    := container-images/sidecar/hooks/precreate/seal-inject.go container-images/sidecar/hooks/precreate/go.mod
 PROXY_SRCS      := container-images/proxy/proxy.go container-images/proxy/go.mod
@@ -26,6 +27,7 @@ SIDECAR_SRCS := container-images/sidecar/Containerfile \
 # Pre-built Go binaries that feed into the sidecar image
 SIDECAR_BINS := container-images/sidecar/seal/sandbox-seal \
 		container-images/sidecar/entrypoint/entrypoint \
+		container-images/sidecar/log/log \
 		container-images/sidecar/hooks/createRuntime/security-policy \
 		container-images/sidecar/hooks/precreate/seal-inject
 
@@ -45,7 +47,7 @@ test:
 	cd container-images/sidecar/entrypoint && go test -v .
 
 # Integration tests need these images on the host (pushed into sidecar at test start).
-INTEG_IMAGES := alpine python:alpine ghcr.io/edera-dev/am-i-isolated:nightly
+INTEG_IMAGES := alpine python:alpine
 
 test-integration: .sidecar.stamp
 	@for img in $(INTEG_IMAGES); do \
@@ -60,6 +62,9 @@ container-images/sidecar/seal/sandbox-seal: $(SEAL_SRCS)
 
 container-images/sidecar/entrypoint/entrypoint: $(ENTRYPOINT_SRCS)
 	cd container-images/sidecar/entrypoint && CGO_ENABLED=0 go build -ldflags='-s -w' -o entrypoint .
+
+container-images/sidecar/log/log: $(LOG_SRCS)
+	cd container-images/sidecar/log && CGO_ENABLED=0 go build -ldflags='-s -w' -o log .
 
 container-images/sidecar/hooks/createRuntime/security-policy: $(SECPOL_SRCS)
 	cd container-images/sidecar/hooks/createRuntime && CGO_ENABLED=0 go build -ldflags='-s -w' -o security-policy .
@@ -107,6 +112,7 @@ clean:
 		.sidecar.stamp .claude.stamp .opencode.stamp .proxy.stamp \
 		container-images/sidecar/seal/sandbox-seal \
 		container-images/sidecar/entrypoint/entrypoint \
+		container-images/sidecar/log/log \
 		container-images/sidecar/hooks/createRuntime/security-policy \
 		container-images/sidecar/hooks/precreate/seal-inject \
 		container-images/proxy/auth-proxy

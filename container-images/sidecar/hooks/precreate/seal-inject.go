@@ -10,13 +10,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // precreate hook: reads OCI config from stdin, injects sandbox-seal as
 // the entrypoint wrapper, derives and injects Landlock policy as an env
 // var, writes modified config to stdout.
-
-const hookLog = "/tmp/hook.log"
 
 const (
 	sealBinary = "/sandbox-seal"
@@ -60,14 +59,19 @@ var infraMountPrefixes = []string{
 	"/var/cache/containers",
 }
 
-
+// logf writes to the sidecar's PID 1 stderr so output appears in
+// `podman logs <sidecar>` on the host. Hook stderr is captured by
+// crun into a pipe and never reaches the container log stream.
 func logf(format string, args ...any) {
-	f, err := os.OpenFile(hookLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	msg := fmt.Sprintf("clampdown: %s seal-inject: "+format+"\n",
+		append([]any{time.Now().UTC().Format(time.RFC3339)}, args...)...)
+	f, err := os.OpenFile("/proc/1/fd/2", os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
+		fmt.Fprint(os.Stderr, msg)
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, format+"\n", args...)
+	fmt.Fprint(f, msg)
 }
 
 func isSubPath(base, path string) bool {
@@ -340,9 +344,17 @@ func main() {
 
 	output, err := json.Marshal(config)
 	if err != nil {
-		logf("seal-inject: marshal: %v", err)
+		logf("marshal: %v", err)
 		os.Exit(1)
 	}
+
+	// Log successful injection with container name and policy summary.
+	var name string
+	if config["hostname"] != nil {
+		_ = json.Unmarshal(config["hostname"], &name)
+	}
+	logf("PASS: name=%s write_exec=%v connect_tcp=%v",
+		name, policy.WriteExec, policy.ConnectTCP)
 
 	os.Stdout.Write(output)
 }

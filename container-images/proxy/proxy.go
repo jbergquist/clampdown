@@ -96,9 +96,9 @@ func main() {
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
-		fmt.Fprintf(os.Stderr, "proxy: %s %s %s %s error: %v\n",
-			time.Now().UTC().Format(time.RFC3339), req.RemoteAddr,
-			req.Method, req.URL.Path, err)
+		fmt.Fprintf(os.Stderr, "clampdown: %s proxy: ERROR %s %s %s %v\n",
+			time.Now().UTC().Format(time.RFC3339),
+			req.RemoteAddr, req.Method, req.URL.Path, err)
 		w.WriteHeader(http.StatusBadGateway)
 	}
 
@@ -133,8 +133,8 @@ func main() {
 		}
 	}()
 
-	fmt.Fprintf(os.Stderr, "proxy: %s %s -> %s\n", time.Now().UTC().Format(time.RFC3339), addr, upstream)
-	fmt.Fprintf(os.Stderr, "proxy: %s ready\n", time.Now().UTC().Format(time.RFC3339))
+	fmt.Fprintf(os.Stderr, "clampdown: %s proxy: listening %s -> %s\n", time.Now().UTC().Format(time.RFC3339), addr, upstream)
+	fmt.Fprintf(os.Stderr, "clampdown: %s proxy: ready\n", time.Now().UTC().Format(time.RFC3339))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

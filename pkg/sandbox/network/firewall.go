@@ -95,6 +95,8 @@ func flushChains(ctx context.Context, rt container.Runtime, sidecar, table strin
 			}
 		}
 	}
+	msg := fmt.Sprintf("RESET: table=%s chains=%v", table, chains)
+	_ = rt.Log(ctx, sidecar, "firewall", msg)
 	slog.Info("reset dynamic rules", "table", table)
 	return nil
 }
@@ -124,6 +126,9 @@ func modifyChain(
 		}
 		count++
 	}
+	msg := fmt.Sprintf("%s: chain=%s targets=%s ports=%s count=%d",
+		verdict, chain, strings.Join(targets, ","), ports, count)
+	_ = rt.Log(ctx, sidecar, "firewall", msg)
 	slog.Info("applied firewall rules",
 		"verdict", verdict,
 		"count", count,

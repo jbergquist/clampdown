@@ -12,17 +12,18 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // State is the OCI runtime state — passed on stdin at createRuntime stage.
 type State struct {
+	ID     string `json:"id"`
 	Bundle string `json:"bundle"`
 }
 
-const hookLog = "/tmp/hook.log"
-
 // Config is a partial OCI config.json — only the fields we inspect.
 type Config struct {
+	Hostname    string            `json:"hostname"`
 	Annotations map[string]string `json:"annotations"`
 	Process     struct {
 		Args            []string `json:"args"`
@@ -152,13 +153,19 @@ var infraMountPrefixes = []string{
 	"/empty",
 }
 
+// logf writes to the sidecar's PID 1 stderr so output appears in
+// `podman logs <sidecar>` on the host. Hook stderr is captured by
+// crun into a pipe and never reaches the container log stream.
 func logf(format string, args ...any) {
-	f, err := os.OpenFile(hookLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	msg := fmt.Sprintf("clampdown: %s security-policy: "+format+"\n",
+		append([]any{time.Now().UTC().Format(time.RFC3339)}, args...)...)
+	f, err := os.OpenFile("/proc/1/fd/2", os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
+		fmt.Fprint(os.Stderr, msg)
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, format+"\n", args...)
+	fmt.Fprint(f, msg)
 }
 
 func blocked(code int, format string, args ...any) *policyError {
@@ -659,6 +666,20 @@ func main() {
 		os.Exit(int(syscall.EINVAL))
 	}
 
+	cid := state.ID
+	if len(cid) > 12 {
+		cid = cid[:12]
+	}
+	name := config.Hostname
+	image := config.Annotations["org.opencontainers.image.ref.name"]
+	if image == "" {
+		image = "-"
+	}
+	cmd := "-"
+	if len(config.Process.Args) > 0 {
+		cmd = strings.Join(config.Process.Args, " ")
+	}
+
 	checks := []func(Config) error{
 		checkCaps,
 		checkSeccomp,
@@ -686,8 +707,10 @@ func main() {
 				logf("check error: %v", err)
 				os.Exit(1)
 			}
-			logf("BLOCKED: %s", pv.Msg)
+			logf("BLOCKED: container=%s name=%s image=%s cmd=%q %s", cid, name, image, cmd, pv.Msg)
 			os.Exit(pv.Code)
 		}
 	}
+
+	logf("PASS: container=%s name=%s image=%s cmd=%q checks=%d", cid, name, image, cmd, len(checks))
 }

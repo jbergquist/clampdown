@@ -69,6 +69,7 @@ COPY --from=iptables /iptables/ /
 COPY --from=iptables /empty /empty
 COPY seal/sandbox-seal /sandbox-seal
 COPY entrypoint/entrypoint /entrypoint
+COPY log/log /log
 COPY hooks/createRuntime/security-policy /usr/libexec/oci/hooks.d/security-policy
 COPY hooks/createRuntime/security-policy.json /usr/share/containers/oci/hooks.d/security-policy.json
 COPY hooks/precreate/seal-inject /usr/libexec/oci/hooks.d/seal-inject
