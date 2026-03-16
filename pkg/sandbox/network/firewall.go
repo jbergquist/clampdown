@@ -28,7 +28,7 @@ var privateV6 = []string{"::1/128", "fc00::/7", "fe80::/10"}
 // BuildAgentFirewall creates the full agent OUTPUT chain structure via
 // iptables-restore. Applied atomically in 2 calls (IPv4 + IPv6).
 //
-// deny mode: loopback → established → private CIDRs REJECT → DNS (rate-limited) →
+// deny mode: loopback → established → DNS (rate-limited) → private CIDRs REJECT →
 //
 //	per-IP TCP 443 ACCEPT → AGENT_ALLOW → terminal REJECT
 //
@@ -62,14 +62,16 @@ func BuildAgentFirewall(ctx context.Context, rt container.Runtime, sidecar strin
 		r.add("OUTPUT", "-m state --state ESTABLISHED,RELATED -j ACCEPT")
 
 		if policy == "deny" {
-			for _, cidr := range privRanges {
-				r.add("OUTPUT", fmt.Sprintf("! -o lo -d %s -j REJECT --reject-with %s", cidr, rejectType))
-			}
-			// DNS rate-limited. Excess DROPped to throttle tunneling.
+			// DNS before private CIDRs: resolver may be on a private IP
+			// (10.0.2.3 slirp4netns, 192.168.x.x bridge). Rate-limited
+			// to throttle tunneling; excess dropped.
 			r.add("OUTPUT", "-p udp --dport 53 -m limit --limit 10/s --limit-burst 20 -j ACCEPT")
 			r.add("OUTPUT", "-p udp --dport 53 -j DROP")
 			r.add("OUTPUT", "-p tcp --dport 53 -m limit --limit 10/s --limit-burst 20 -j ACCEPT")
 			r.add("OUTPUT", "-p tcp --dport 53 -j DROP")
+			for _, cidr := range privRanges {
+				r.add("OUTPUT", fmt.Sprintf("! -o lo -d %s -j REJECT --reject-with %s", cidr, rejectType))
+			}
 			for _, dest := range dests {
 				r.add("OUTPUT", fmt.Sprintf("-p tcp --dport 443 -d %s -j ACCEPT", dest))
 			}
