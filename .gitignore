@@ -7,12 +7,15 @@ container-images/gemini/sandbox-seal
 container-images/opencode/sandbox-seal
 container-images/proxy/auth-proxy
 container-images/sidecar/entrypoint/entrypoint
+container-images/sidecar/log/log
 container-images/sidecar/hooks/createRuntime/security-policy
 container-images/sidecar/hooks/precreate/seal-inject
 container-images/sidecar/seal/sandbox-seal
 future
 *.so
 .claude
+.cache
+.home
 .sidecar.stamp
 .claude.stamp
 .codex.stamp
