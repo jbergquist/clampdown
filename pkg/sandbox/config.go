@@ -69,7 +69,6 @@ func sidecarConfig(
 			"FOWNER",
 			"FSETID",
 			"KILL",
-			"LINUX_IMMUTABLE",
 			"MKNOD",
 			"NET_ADMIN",
 			"NET_BIND_SERVICE",

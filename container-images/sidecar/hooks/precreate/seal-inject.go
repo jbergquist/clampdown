@@ -121,6 +121,7 @@ func derivePolicy(mounts []mount) landlockPolicy {
 			"/usr/bin", "/usr/sbin", "/usr/lib", "/usr/lib64",
 			"/usr/libexec", "/usr/local",
 			"/lib", "/lib64",
+			"/opt",
 			"/.sandbox",
 		},
 		ReadOnly: []string{"/"},
@@ -257,6 +258,15 @@ func main() {
 
 	// Derive policy and inject as env var.
 	policy := derivePolicy(mounts)
+
+	// Ensure the original entrypoint is executable under Landlock.
+	if len(args) > 2 {
+		entrypoint := args[2] // args[0]="/.sandbox/seal", args[1]="--", args[2]=original
+		if filepath.IsAbs(entrypoint) {
+			policy.ReadExec = append(policy.ReadExec, entrypoint)
+		}
+	}
+
 	policyJSON, _ := json.Marshal(policy)
 
 	var env []string
