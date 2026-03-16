@@ -409,7 +409,22 @@ func runTests(m *testing.M) (code int) {
 		return 1
 	}
 
-	return m.Run()
+	code = m.Run()
+	if code != 0 {
+		// Dump sidecar logs before cleanup so failures are diagnosable.
+		for _, sc := range []string{sidecarName, digestSidecar, integSidecar} {
+			if sc == "" {
+				continue
+			}
+			logs, logErr := rt.Logs(ctx, sc)
+			if logErr != nil {
+				fmt.Fprintf(os.Stderr, "--- LOGS %s: error: %v\n", sc, logErr)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "--- LOGS %s ---\n%s\n", sc, logs)
+		}
+	}
+	return code
 }
 
 // ---------------------------------------------------------------------------
