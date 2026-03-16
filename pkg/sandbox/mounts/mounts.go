@@ -49,6 +49,7 @@ var UniversalProtectedPaths = []agent.ProtectedPath{
 var UniversalMaskedPaths = []agent.MaskedPath{
 	{Path: ".env"},
 	{Path: ".envrc"},
+	{Path: ".npmrc"},
 	{Path: ".clampdownrc"},
 }
 

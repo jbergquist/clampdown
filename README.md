@@ -267,6 +267,9 @@ of flags: `.git/config`, `.gitmodules`, `.clampdownrc`, `.devcontainer`, `.envrc
 Protected paths propagate into nested containers via recursive bind mounts; explicit
 RW re-mounts are blocked by the security-policy hook.
 
+Masked paths are hidden entirely (replaced with `/dev/null`): `.env`, `.envrc`, `.npmrc`,
+`.clampdownrc`. The agent sees the path exists but reads empty content.
+
 ### Resources
 
 | Flag | Default | Env | Description |

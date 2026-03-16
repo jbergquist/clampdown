@@ -29,19 +29,19 @@
 │  │  Seccomp: seccomp_sidecar.json (denylist, ~85 blocked)           │    │
 │  │    Blocks: io_uring, perf_event_open, userfaultfd, modify_ldt,   │    │
 │  │    kcmp, process_madvise, kexec_*, init/delete/finit_module,     │    │
-│  │    add_key, request_key, splice/tee/vmsplice (Dirty Pipe),       │    │
+│  │    add_key, request_key, splice/tee/vmsplice (pipe exploitation),│    │
 │  │    open_by_handle_at, swapoff/swapon, acct, vhangup,             │    │
 │  │    ioperm/iopl, clock_settime, setdomainname/sethostname,        │    │
 │  │    personality (arg-filtered), TIOCSTI/TIOCLINUX/TIOCSETD,       │    │
-│  │    SIOCATMARK, IOC_WATCH_QUEUE_SET_FILTER (CVE-2022-0995),       │    │
-│  │    MSG_OOB arg-filtered (CVE-2025-38236), mq_* (CVE-2017-11176),│    │
-│  │    MAP_GROWSDOWN (CVE-2023-3269), socket family ≥ 17,            │    │
-│  │    obsolete syscalls.                                            │    │
+│  │    SIOCATMARK, IOC_WATCH_QUEUE_SET_FILTER (watch queue class),   │    │
+│  │    MSG_OOB arg-filtered (AF_UNIX UAF class), mq_* (mq_notify     │    │
+│  │    UAF class), MAP_GROWSDOWN (VMA stack expansion class),        │    │
+│  │    socket family ≥ 17, obsolete syscalls.                        │    │
 │  │    Allows: mount, bpf, clone3, seccomp, keyctl, ptrace           │    │
 │  │    — needed by podman/crun for container management.             │    │
 │  │                                                                  │    │
 │  │  OCI Hooks (intercept nested container lifecycle):               │    │
-│  │    precreate:    seal-inject (policy, UID, seal mount)            │    │
+│  │    precreate:    seal-inject (policy, UID, seal mount)           │    │
 │  │    createRuntime: security-policy (17 checks)                    │    │
 │  │                                                                  │    │
 │  │  ┌─────────────────────────────────────────────────────────┐     │    │
@@ -76,7 +76,8 @@
 │  │  cap-drop=ALL, no-new-privileges, read-only rootfs               │    │
 │  │                                                                  │    │
 │  │  API keys: sk-proxy (dummy), BASE_URL=http://localhost:2376      │    │
-│  │  Protected paths: .git/hooks, .envrc, .mcp.json, etc.            │    │
+│  │  Protected paths: .git/hooks, .mcp.json, etc. (RO)               │    │
+│  │  Masked paths: .env, .envrc, .npmrc, .clampdownrc (/dev/null)    │    │
 │  │  Inter-container comm: podman networks (not -p port publishing)  │    │
 │  └──────────────────────────────────────────────────────────────────┘    │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -403,9 +404,9 @@ splice/tee/vmsplice, perf_event_open), user namespace creation
 (CLONE_NEWUSER arg-filtered on clone/unshare), privilege escalation
 (ptrace, process_vm_*, execveat), kernel keyring, system disruption,
 hardware I/O, time manipulation, SysV IPC, POSIX message queues
-(CVE-2017-11176 class), terminal injection (TIOCSTI/TIOCLINUX/TIOCSETD),
-SIOCATMARK (CVE-2025-38236), MSG_OOB arg-filtered on send*/recv*
-(CVE-2025-38236), MAP_GROWSDOWN (CVE-2023-3269 StackRot class),
+(mq_notify UAF class), terminal injection (TIOCSTI/TIOCLINUX/TIOCSETD),
+SIOCATMARK (OOB mark ioctl), MSG_OOB arg-filtered on send*/recv*
+(AF_UNIX UAF class), MAP_GROWSDOWN (VMA stack expansion class),
 prctl(PR_SET_DUMPABLE) arg-filtered (prevents core dump re-enable),
 prctl(PR_SET_PTRACER) (prevents Yama ptrace_scope bypass),
 and socket families >= 17. For nested containers it layers on
