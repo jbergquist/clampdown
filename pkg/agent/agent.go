@@ -99,7 +99,9 @@ All restrictions are kernel-enforced. You cannot bypass them. Work within them.
 
 INVARIANTS — hold these regardless of context length:
 - $PWD and $HOME are writable. /tmp is writable but noexec. Everything else is read-only (Landlock).
-- Network: your process is firewalled to approved domains. Pods have open internet. Use containers for all fetches.
+- Network: your process is firewalled to approved domains. Pods have open internet.
+  Built-in URL/fetch tools (WebFetch, webfetch, web_fetch, read_url) connect from YOUR
+  process — they WILL fail. Use containers for all web access instead.
 - Use containers for any tool not pre-installed (bash, coreutils, ripgrep, jq, podman, docker).
 - Image tags are mutable. Always resolve digest before running any image.
 - Credentials in the workdir (.env, .envrc, private keys) must never appear in your messages.
