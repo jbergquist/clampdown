@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -13,9 +14,15 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
+
+// models stores the extracted model name per inbound request.
+// Set in Rewrite (keyed by pr.In), read+deleted in the mux handler.
+var models sync.Map
 
 // responseRecorder wraps http.ResponseWriter to capture status code and
 // response body size for audit logging. Implements Unwrap so
@@ -78,6 +85,12 @@ func main() {
 					return io.NopCloser(bytes.NewReader(body)), nil
 				}
 				pr.Out.ContentLength = int64(len(body))
+
+				// Extract model name for audit logging.
+				var partial struct{ Model string }
+				if json.Unmarshal(body, &partial) == nil && partial.Model != "" {
+					models.Store(pr.In, partial.Model)
+				}
 			}
 		},
 	}
@@ -94,9 +107,14 @@ func main() {
 		start := time.Now().UTC()
 		rec := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
 		proxy.ServeHTTP(rec, req)
-		fmt.Fprintf(os.Stderr, "proxy: %s %s %s %s %d req=%d resp=%d %s\n",
-			start.Format(time.RFC3339), req.RemoteAddr,
-			req.Method, req.URL.Path, rec.status,
+		model, _ := models.LoadAndDelete(req)
+		modelStr, _ := model.(string)
+		if modelStr == "" {
+			modelStr = modelFromPath(req.URL.Path)
+		}
+		fmt.Fprintf(os.Stderr, "clampdown: %s proxy: %s %s %d model=%s req=%d resp=%d %s\n",
+			start.Format(time.RFC3339),
+			req.Method, req.URL.Path, rec.status, modelStr,
 			req.ContentLength, rec.bytes,
 			time.Since(start).Truncate(time.Millisecond))
 	})
@@ -125,6 +143,26 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
+}
+
+// modelFromPath extracts the model from Gemini-style URL paths
+// like /v1beta/models/gemini-pro:generateContent. Returns "-" if
+// the path doesn't match.
+func modelFromPath(path string) string {
+	const prefix = "/models/"
+	i := strings.Index(path, prefix)
+	if i < 0 {
+		return "-"
+	}
+	rest := path[i+len(prefix):]
+	if rest == "" {
+		return "-"
+	}
+	colon := strings.IndexByte(rest, ':')
+	if colon > 0 {
+		return rest[:colon]
+	}
+	return rest
 }
 
 func requireEnv(name string) string {
