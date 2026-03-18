@@ -38,8 +38,10 @@ clampdown runs three container types with different privilege levels:
 | AppArmor | unconfined | confined | confined |
 
 - The sidecar is privileged enough to run podman and enforce firewall rules, but has no
-shell and no libc so it cannot be repurposed.  
-- The agent never holds real API keys — it gets a dummy key and talks to a local auth
+shell and no libc so it cannot be repurposed. A seccomp-notif supervisor intercepts
+all mount/umount operations in real time, blocking attempts to unmount masked paths
+or remount protected files -- closing the gap where Landlock cannot be applied.
+- The agent never holds real API keys -- it gets a dummy key and talks to a local auth
 proxy that injects the real credentials. Even if the agent connects to the upstream API
 directly, the dummy key produces a 401.
 - Tool containers have open egress to the public internet but hold no secrets: 
@@ -53,18 +55,18 @@ clampdown treats the agent as an untrusted process. Not because current models a
 malicious, but because the attack surface is real: prompt injection can hijack an
 agent's actions, jailbreaks can override its instructions, and even well-behaved
 models run arbitrary code that may do things you didn't ask for. If the agent can
-`curl`, `cat ~/.ssh`, or `podman run --privileged`, the question is when — not
-whether — something goes wrong.
+`curl`, `cat ~/.ssh`, or `podman run --privileged`, the question is when -- not
+whether -- something goes wrong.
 
 Every defense in clampdown enforces from outside the agent's process. Filesystem
 restrictions are kernel-level Landlock rulesets applied before the agent binary starts.
 Network policy is iptables chains installed by the sidecar, in a network namespace the
 agent shares but cannot configure. Seccomp profiles are inherited from the container
-runtime — the agent cannot modify or remove them. OCI hooks validate every container
+runtime -- the agent cannot modify or remove them. OCI hooks validate every container
 the agent creates before its entrypoint runs, and there is no flag to skip them.
 
-None of these controls depend on the agent cooperating. A fully compromised agent —
-one that ignores its system prompt entirely and tries to escape — hits the same
+None of these controls depend on the agent cooperating. A fully compromised agent --
+one that ignores its system prompt entirely and tries to escape -- hits the same
 kernel-enforced walls as one following instructions. That's the point.
 
 ---
@@ -74,9 +76,9 @@ kernel-enforced walls as one following instructions. That's the point.
 ### Nested container enforcement
 
 The agent runs inside a zero-capability container: `cap-drop=ALL`, read-only rootfs,
-`no-new-privileges`, and a seccomp profile that blocks ~132 syscalls including all
+`no-new-privileges`, and a seccomp profile that blocks ~133 syscalls including all
 known kernel exploit primitives (io_uring, userfaultfd, BPF, perf_event, splice/tee).
-When the agent needs to run a tool — a compiler, a test runner, a shell command — it
+When the agent needs to run a tool -- a compiler, a test runner, a shell command -- it
 sends a `podman run` request to the sidecar's API socket. The sidecar intercepts every
 container creation through two OCI hooks that run synchronously before the container
 process starts:
@@ -87,12 +89,31 @@ command. The hook also assigns a non-root UID mapped outside the container's use
 namespace, mounts `hidepid=2` on `/proc`, and injects masked paths over sensitive
 kernel interfaces (`/proc/kcore`, `/proc/sysrq-trigger`, and nine others).
 
-**createRuntime** (`security-policy`): validates the final OCI config against 15
-security checks — blocking privileged mode, disallowed capabilities, host namespace
-sharing, unsafe bind mounts, dangerous devices, and RW re-mounts of protected paths.
+**createRuntime** (`security-policy`): validates the final OCI config against 17
+security checks -- blocking privileged mode, disallowed capabilities, host namespace
+sharing, unsafe bind mounts, dangerous devices, RW re-mounts of protected paths,
+/proc mount type, and supplementary groups.
 A container that fails any check is killed before its entrypoint runs.
 
 Both hooks apply to every `podman run` the agent issues. There is no opt-out.
+
+### Sidecar mount supervisor
+
+The sidecar cannot use Landlock (mount() internally triggers Landlock path hooks).
+To compensate, the sidecar entrypoint installs a seccomp-notif BPF filter that
+intercepts mount, umount, and process-targeting syscalls. A supervisor goroutine
+evaluates each call against a set of protected paths discovered from
+`/proc/self/mountinfo` at startup.
+
+This blocks attempts to unmount masked paths (exposing `.env` contents), remount
+protected paths read-write, create a new procfs to access `/proc/1/mem`, or use
+ptrace/process_vm_readv to read the supervisor's memory. Legitimate mount operations
+(podman creating containers) pass through unimpeded.
+
+The filter is inherited by all processes in the sidecar. For agent and nested
+containers, the workload seccomp profile already blocks mount/umount entirely
+(stricter than the supervisor's USER_NOTIF), so the supervisor effectively only
+handles sidecar-level operations.
 
 ### Landlock filesystem isolation
 
@@ -101,26 +122,26 @@ access control at the kernel level, beneath and independent of container bind mo
 and Unix permission bits.
 
 `sandbox-seal` applies a Landlock ruleset inside the agent process just before it
-execs the agent binary. The rules cannot be lifted after exec — Landlock policies are
+execs the agent binary. The rules cannot be lifted after exec -- Landlock policies are
 inherited across exec and can only be made more restrictive, never relaxed.
 
 Agent policy:
 - **Read-write + execute**: your working directory (the project being edited)
-- **Read + execute**: system directories (`/usr`, `/bin`, `/lib`, `/etc`, …)
-- **No access**: everything else — host home, other projects, sensitive kernel paths
+- **Read + execute**: system directories (`/usr`, `/bin`, `/lib`, `/etc`, ...)
+- **No access**: everything else -- host home, other projects, sensitive kernel paths
 
 Tool containers launched by the agent get a derived policy based on their mount list:
 writable access is granted only to paths explicitly bind-mounted into the container.
 
-Landlock V3 (kernel ≥ 6.2) is a hard requirement. The launcher refuses to start if
-Landlock is absent. Kernel ≥ 6.12 is recommended for full feature coverage (V4 TCP
+Landlock V3 (kernel >= 6.2) is a hard requirement. The launcher refuses to start if
+Landlock is absent. Kernel >= 6.12 is recommended for full feature coverage (V4 TCP
 connect at 6.7, V5 IoctlDev at 6.10, V6 IPC scoping at 6.12). V7 audit logging
 requires 6.15+.
 
 ### Network isolation
 
 The agent container shares the sidecar's network namespace. All egress is controlled
-by iptables rules the sidecar installs at startup — not by application-layer filtering
+by iptables rules the sidecar installs at startup -- not by application-layer filtering
 that the agent could bypass.
 
 **Agent (default: deny)**: outbound connections are blocked except for an explicit
@@ -134,11 +155,11 @@ Tool containers cannot reach the host, the sidecar, or other containers by inter
 
 Private CIDRs are blocked for both the agent and tool containers regardless of policy.
 Both defaults are configurable (`--agent-policy`, `--pod-policy`), and rules can be
-adjusted at runtime without restarting the session — see
+adjusted at runtime without restarting the session -- see
 [Runtime network control](#runtime-network-control).
 
-For the full technical reference — seccomp profile tables, iptables chains, Landlock
-access sets, capability lists, OCI hook pipeline, and masked path inventory — see
+For the full technical reference -- seccomp profile tables, iptables chains, Landlock
+access sets, capability lists, OCI hook pipeline, and masked path inventory -- see
 [DIAGRAM.md](DIAGRAM.md).
 
 ---
@@ -147,11 +168,11 @@ access sets, capability lists, OCI hook pipeline, and masked path inventory — 
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Linux | — | Landlock is Linux-only |
-| Kernel | ≥ 6.2 | Hard requirement. Session refuses to start below this. |
-| Kernel | ≥ 6.12 | Recommended. V4 TCP connect (6.7), V5 IoctlDev (6.10), V6 IPC scoping (6.12). V7 audit logging (6.15). |
+| Linux | -- | Landlock is Linux-only |
+| Kernel | >= 6.2 | Hard requirement. Session refuses to start below this. |
+| Kernel | >= 6.12 | Recommended. V4 TCP connect (6.7), V5 IoctlDev (6.10), V6 IPC scoping (6.12). V7 audit logging (6.15). |
 | rootless podman | any recent | or Docker (rootful with a warning) or nerdctl |
-| Go | ≥ 1.23 | Build-time only |
+| Go | >= 1.23 | Build-time only |
 
 Verify Landlock is active on your kernel:
 
@@ -246,7 +267,7 @@ clampdown [options] <agent> [-- agent-flags...]
 | Flag | Default | Env | Description |
 |------|---------|-----|-------------|
 | `--agent-policy` | `deny` | `SANDBOX_AGENT_POLICY` | Agent egress default: `deny` (allowlist only) or `allow` |
-| `--agent-allow` | — | `SANDBOX_AGENT_ALLOW` | Extra domains for the agent allowlist (comma-separated) |
+| `--agent-allow` | -- | `SANDBOX_AGENT_ALLOW` | Extra domains for the agent allowlist (comma-separated) |
 | `--pod-policy` | `allow` | `SANDBOX_POD_POLICY` | Tool container egress default: `allow` or `deny` |
 
 The agent's egress allowlist includes the domains required by the agent (API endpoints,
@@ -258,9 +279,9 @@ blocked for both agent and tool containers, regardless of policy.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--allow-hooks` | off | Allow agent to modify `.git/hooks/` (read-only by default) |
-| `--protect` | — | Additional paths to protect read-only (repeatable; trailing `/` = directory) |
-| `--mask` | — | Additional paths to mask - prevent read (repeatable; trailing `/` = directory) |
-| `--unmask` | — | Remove paths from the default mask list (e.g. `--unmask .env`) |
+| `--protect` | -- | Additional paths to protect read-only (repeatable; trailing `/` = directory) |
+| `--mask` | -- | Additional paths to mask - prevent read (repeatable; trailing `/` = directory) |
+| `--unmask` | -- | Remove paths from the default mask list (e.g. `--unmask .env`) |
 
 Protected paths are always read-only inside the agent and nested containers, regardless
 of flags: `.git/config`, `.gitmodules`, `.clampdownrc`, `.devcontainer`, `.envrc`,
@@ -307,7 +328,7 @@ Credentials are opt-in. Nothing is forwarded by default.
 | `--log-level` | `info` | `debug`, `info`, `warn`, `error` |
 
 **Tripwire** monitors protected host paths via inotify and kills the session
-immediately if any are modified — the last line of defense against a full
+immediately if any are modified -- the last line of defense against a full
 container escape. It also snapshots files before launch and restores them on
 exit (restoration happens regardless of the flag).
 
@@ -368,11 +389,11 @@ clampdown logs -s <session-id> --dump-agent-conversation
 
 The agent's full conversation (tool calls, responses, errors) is also
 captured in the container logs. Use `--dump-agent-conversation` to
-include it — the output is cleaned of ANSI escapes and TUI noise,
+include it -- the output is cleaned of ANSI escapes and TUI noise,
 with runtime timestamps preserved for correlation with audit events.
 
 The audit log is persisted to `~/.cache/clampdown/<project>/state/audit-<session>.log`
-when the session ends. This file survives `clampdown delete` (container removal) —
+when the session ends. This file survives `clampdown delete` (container removal) --
 only `clampdown prune` removes it.
 
 ---
@@ -441,8 +462,8 @@ Persistent defaults live in `$XDG_CONFIG_HOME/clampdown/config.json` (typically
 `KEY=VALUE` files for API key configuration. Two locations are merged; project
 overrides global:
 
-- `~/.config/clampdown/clampdownrc` — global
-- `$workdir/.clampdownrc` — per-project
+- `~/.config/clampdown/clampdownrc` -- global
+- `$workdir/.clampdownrc` -- per-project
 
 ```sh
 # ~/.config/clampdown/clampdownrc

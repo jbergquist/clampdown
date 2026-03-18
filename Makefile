@@ -8,7 +8,7 @@ PROXY_IMAGE    := clampdown-proxy:latest
 
 # Go binary sources
 SEAL_SRCS       := container-images/sidecar/seal/seal.go container-images/sidecar/seal/go.mod container-images/sidecar/seal/go.sum
-ENTRYPOINT_SRCS := container-images/sidecar/entrypoint/entrypoint.go container-images/sidecar/entrypoint/go.mod
+ENTRYPOINT_SRCS := container-images/sidecar/entrypoint/entrypoint.go container-images/sidecar/entrypoint/bootstrap.go container-images/sidecar/entrypoint/protect.go container-images/sidecar/entrypoint/filter.go container-images/sidecar/entrypoint/supervisor.go container-images/sidecar/entrypoint/go.mod container-images/sidecar/entrypoint/go.sum
 LOG_SRCS        := container-images/sidecar/log/log.go container-images/sidecar/log/go.mod
 SECPOL_SRCS     := container-images/sidecar/hooks/createRuntime/security-policy.go container-images/sidecar/hooks/createRuntime/go.mod
 SEALINJ_SRCS    := container-images/sidecar/hooks/precreate/seal-inject.go container-images/sidecar/hooks/precreate/go.mod
@@ -42,6 +42,7 @@ all: .sidecar.stamp .claude.stamp .opencode.stamp .proxy.stamp launcher
 
 test:
 	go test -v ./pkg/...
+	cd container-images/sidecar/entrypoint && go test -v .
 	cd container-images/sidecar/seal && go test -v .
 	cd container-images/sidecar/hooks/createRuntime && go test -v .
 	cd container-images/sidecar/hooks/precreate && go test -v .

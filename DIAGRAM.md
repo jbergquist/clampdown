@@ -19,12 +19,14 @@
 │  ┌──────▼───────────────────────────────────────────────────────────┐    │
 │  │ SIDECAR CONTAINER  (FROM scratch, read-only rootfs)              │    │
 │  │                                                                  │    │
-│  │  PID 1: /entrypoint                                              │    │
+│  │  PID 1: /entrypoint (persistent supervisor)                      │    │
 │  │    1. Harden /proc/sys (bind-mount read-only)                    │    │
 │  │    2. Bootstrap cgroup v2 (nsdelegate, controllers)              │    │
 │  │    3. Build iptables firewall (agent + pod chains)               │    │
 │  │    4. Write /run/sandbox/{uid,gid}, bind-mount RO                │    │
-│  │    5. exec → podman system service tcp:127.0.0.1:2375            │    │
+│  │    5. Discover protected paths, harden PID 1                     │    │
+│  │    6. Install seccomp-notif filter -> supervisor goroutine       │    │
+│  │    7. Start podman system service as child process               │    │
 │  │                                                                  │    │
 │  │  Seccomp: seccomp_sidecar.json (denylist, ~85 blocked)           │    │
 │  │    Blocks: io_uring, perf_event_open, userfaultfd, modify_ldt,   │    │
@@ -36,9 +38,22 @@
 │  │    SIOCATMARK, IOC_WATCH_QUEUE_SET_FILTER (watch queue class),   │    │
 │  │    MSG_OOB arg-filtered (AF_UNIX UAF class), mq_* (mq_notify     │    │
 │  │    UAF class), MAP_GROWSDOWN (VMA stack expansion class),        │    │
-│  │    socket family ≥ 17, obsolete syscalls.                        │    │
+│  │    socket family >= 17, obsolete syscalls.                       │    │
 │  │    Allows: mount, bpf, clone3, seccomp, keyctl, ptrace           │    │
-│  │    — needed by podman/crun for container management.             │    │
+│  │    -- needed by podman/crun for container management.            │    │
+│  │                                                                  │    │
+│  │  Seccomp-notif supervisor (entrypoint filter, on top of above):  │    │
+│  │    Intercepts 11 syscalls via SECCOMP_RET_USER_NOTIF:            │    │
+│  │    mount, umount2, mount_setattr, move_mount, open_tree,         │    │
+│  │    fsopen, fsconfig, fsmount, ptrace, process_vm_readv/writev.   │    │
+│  │    Policy: BLOCK mount/umount targeting protected paths,         │    │
+│  │    BLOCK non-recursive bind stripping /dev/null sub-mounts,      │    │
+│  │    BLOCK procfs mount from sidecar PID namespace,                │    │
+│  │    BLOCK ptrace/process_vm_* targeting PID 1. ALLOW otherwise.   │    │
+│  │    Inherited by all children (podman, crun, nested containers).  │    │
+│  │    For agent/nested: workload profile returns ERRNO for mount    │    │
+│  │    (stricter than USER_NOTIF), so supervisor only handles        │    │
+│  │    sidecar-level processes that legitimately need mount().       │    │
 │  │                                                                  │    │
 │  │  OCI Hooks (intercept nested container lifecycle):               │    │
 │  │    precreate:    seal-inject (policy, UID, seal mount)           │    │
@@ -58,7 +73,7 @@
 │  │ AUTH PROXY CONTAINER  (FROM scratch, read-only rootfs)           │    │
 │  │                                                                  │    │
 │  │  Entrypoint: sandbox-seal -- auth-proxy                          │    │
-│  │  Listens: 127.0.0.1:2376 → upstream API (rewrites auth header)   │    │
+│  │  Listens: 127.0.0.1:2376 -> upstream API (rewrites auth header)  │    │
 │  │                                                                  │    │
 │  │  Seccomp: workload profile (~133 blocked)                        │    │
 │  │  Landlock: ReadOnly:[/], ReadExec:[/usr/local/bin]               │    │
@@ -105,7 +120,7 @@
               │  │    (10/s burst 20)     │   │
               │  │ 4. REJECT private CIDRs│   │
               │  │ 5. ACCEPT allowlist IPs│   │
-              │  │ 6. → AGENT_ALLOW       │   │
+              │  │ 6. -> AGENT_ALLOW      │   │
               │  │ 7. REJECT (default)    │   │
               │  └────────────────────────┘   │
               │                               │
@@ -113,9 +128,9 @@
               │  ┌────────────────────────┐   │
               │  │ 1. ACCEPT established  │   │
               │  │ 2. ACCEPT loopback     │   │
-              │  │ 3. → POD_ALLOW         │   │
+              │  │ 3. -> POD_ALLOW        │   │
               │  │ 4. DROP private CIDRs  │   │
-              │  │ 5. → POD_BLOCK         │   │
+              │  │ 5. -> POD_BLOCK        │   │
               │  │ 6. ACCEPT (default)    │   │
               │  └────────────────────────┘   │
               └───────────────────────────────┘
@@ -188,7 +203,7 @@ podman run ...
 ┌──────────────────────────────────────────────┐
 │  PRECREATE: seal-inject                      │
 │                                              │
-│  1. Overwrite process.user → sandbox UID/GID │
+│  1. Overwrite process.user -> sandbox UID/GID│
 │  2. Prepend /.sandbox/seal -- to args        │
 │  3. Derive Landlock policy from mounts       │
 │  4. Inject SANDBOX_POLICY env var            │
@@ -203,23 +218,23 @@ podman run ...
 ┌─────────────────────────────────────────────┐
 │  CREATERUNTIME: security-policy (17 checks) │
 │                                             │
-│   1. checkCaps             → EPERM          │
-│   2. checkSeccomp          → EPERM          │
-│   3. checkNoNewPrivileges  → EPERM          │
-│   4. checkNamespaces       → EOPNOTSUPP     │
-│   5. checkMounts           → EACCES         │
-│   6. checkMountOptions     → EACCES         │
-│   7. checkMountPropagation → EPERM          │
-│   8. checkRootfsPropagation→ EPERM          │
-│   9. checkDevices          → EACCES         │
-│  10. checkMaskedPaths      → EPERM          │
-│  11. checkReadonlyPaths    → EPERM          │
-│  12. checkSysctl           → EPERM          │
-│  13. checkRlimits          → EPERM          │
-│  14. checkImageRef         → EACCES/warn    │
-│  15. checkMountReadonly    → EACCES         │
-│  16. checkProcMount        → EPERM          │
-│  17. checkAdditionalGids   → EPERM          │
+│   1. checkCaps             -> EPERM         │
+│   2. checkSeccomp          -> EPERM         │
+│   3. checkNoNewPrivileges  -> EPERM         │
+│   4. checkNamespaces       -> EOPNOTSUPP    │
+│   5. checkMounts           -> EACCES        │
+│   6. checkMountOptions     -> EACCES        │
+│   7. checkMountPropagation -> EPERM         │
+│   8. checkRootfsPropagation-> EPERM         │
+│   9. checkDevices          -> EACCES        │
+│  10. checkMaskedPaths      -> EPERM         │
+│  11. checkReadonlyPaths    -> EPERM         │
+│  12. checkSysctl           -> EPERM         │
+│  13. checkRlimits          -> EPERM         │
+│  14. checkImageRef         -> EACCES/warn   │
+│  15. checkMountReadonly    -> EACCES        │
+│  16. checkProcMount        -> EPERM         │
+│  17. checkAdditionalGids   -> EPERM         │
 └──────────────────┬──────────────────────────┘
                    │
      container process starts
@@ -230,12 +245,12 @@ podman run ...
 │                                             │
 │  1. Parse SANDBOX_POLICY                    │
 │  2. applyLandlock (V7 BestEffort)           │
-│     → Filesystem (4 tiers + Refer)          │
-│     → IoctlDev in write tiers (V5+)         │
-│     → IPC scoping (V6+)                     │
-│     → ConnectTCP (V4+, if specified)        │
-│  3. closeExtraFDs (≥ 3 → close-on-exec)     │
-│  4. exec → original entrypoint              │
+│     -> Filesystem (4 tiers + Refer)         │
+│     -> IoctlDev in write tiers (V5+)        │
+│     -> IPC scoping (V6+)                    │
+│     -> ConnectTCP (V4+, if specified)       │
+│  3. closeExtraFDs (>= 3 -> close-on-exec)   │
+│  4. exec -> original entrypoint             │
 └─────────────────────────────────────────────┘
 ```
 
@@ -253,8 +268,13 @@ profiles to disk, and cleans up stale containers from previous sessions.
 
 The sidecar starts first in detached mode. Its entrypoint hardens
 /proc/sys, bootstraps cgroup v2, builds the iptables firewall, writes
-the sandbox identity files (UID/GID, bind-mounted read-only), then
-execs the podman system service.
+the sandbox identity files (UID/GID, bind-mounted read-only), discovers
+protected paths from /proc/self/mountinfo, hardens PID 1
+(PR_SET_DUMPABLE=0, /proc/1/mem masked with /dev/null), installs a
+seccomp-notif filter that intercepts mount/umount/ptrace operations,
+and starts the supervisor goroutine. The entrypoint then starts
+podman system service as a child process (not exec -- the supervisor
+must remain as PID 1 to handle notifications).
 
 Once the sidecar's podman API responds, the launcher checks whether an
 API key is available (from the host environment or .clampdownrc). If a
@@ -283,7 +303,7 @@ For Claude, the SDK reads `ANTHROPIC_BASE_URL` directly. For OpenCode,
 most providers do not support a base URL environment variable. The
 launcher instead injects `OPENCODE_CONFIG_CONTENT` with the proxy URL,
 which OpenCode deep-merges at highest precedence over all other config.
-Each agent uses one provider at a time — the first matching key wins.
+Each agent uses one provider at a time -- the first matching key wins.
 
 Even if the agent connects to the upstream API directly on port 443
 (allowed by Landlock for infrastructure like models.dev and telemetry),
@@ -308,6 +328,56 @@ at runtime by the seal-inject OCI hook from each container's mount list.
 Landlock requires kernel 6.2+ (ABI V3). Features from V4-V7 degrade
 gracefully via BestEffort. Landlock cannot be applied to the sidecar
 because mount() internally triggers Landlock path hooks (EPERM).
+
+### Sidecar mount supervisor
+
+The sidecar cannot use Landlock (mount() triggers Landlock path hooks
+internally -> EPERM). This left mount operations in the sidecar
+unsupervised -- a gap in defense-in-depth. The seccomp-notif supervisor
+closes this gap.
+
+The entrypoint installs a seccomp BPF filter using
+`SECCOMP_RET_USER_NOTIF` for 11 syscalls (mount, umount2,
+mount_setattr, move_mount, open_tree, fsopen, fsconfig, fsmount,
+ptrace, process_vm_readv, process_vm_writev). When any sidecar-level
+process invokes these, the kernel suspends the caller and delivers
+the notification to the supervisor goroutine, which reads the
+caller's memory to extract paths, validates them against a set of
+protected paths, and either continues the syscall or returns EPERM.
+
+Protected paths are discovered dynamically from `/proc/self/mountinfo`
+at startup: all read-only bind mounts under the workdir (protected
+files like `.git/hooks`), all `/dev/null` mounts (masked files like
+`.env`), plus `/proc/sys` and `/proc/1` unconditionally.
+
+**What the supervisor blocks:**
+- `umount2` on any protected or masked path
+- `mount` targeting a protected path (prevents overlay, remount, tmpfs over it)
+- Non-recursive `mount(MS_BIND)` where the source is the workdir or an
+  ancestor (strips `/dev/null` sub-mounts, exposing masked file contents)
+- `mount("proc")` from the sidecar's PID namespace (new procfs would
+  expose `/proc/1/mem` without the `/dev/null` mask)
+- `mount_setattr` / `move_mount` on protected paths
+- Non-recursive `open_tree(OPEN_TREE_CLONE)` of the workdir or ancestors
+  (same sub-mount stripping attack as non-recursive bind)
+- `fsopen("proc")` from the sidecar's PID namespace
+- `ptrace` / `process_vm_readv` / `process_vm_writev` targeting PID 1
+
+**Filter inheritance:** The BPF filter is inherited by all children
+(kernel guarantee). For agent and nested containers, the workload
+seccomp profile returns ERRNO for mount/umount (stricter than
+USER_NOTIF -- the kernel picks the strictest). So the supervisor
+effectively only handles sidecar-level processes (podman, crun) that
+legitimately need mount() for container operations.
+
+**TOCTOU mitigation:** After reading paths from the caller's memory,
+the supervisor calls `SECCOMP_IOCTL_NOTIF_ID_VALID` to verify the
+notification is still active (the caller hasn't been killed/replaced).
+
+**Fallback:** If seccomp-notif installation fails (kernel too old or
+seccomp flags unsupported), the entrypoint falls back to exec'ing
+podman directly. The OCI hooks and workload seccomp profile still
+provide protection; only the sidecar-level mount supervision is lost.
 
 ### Network policy
 
@@ -358,15 +428,15 @@ prefixed with `clampdown: <RFC3339> <source>:` so they can be filtered,
 merged, and sorted chronologically across containers.
 
 **Sources:**
-- **OCI hooks** (security-policy, seal-inject) — write to `/proc/1/fd/2`
+- **OCI hooks** (security-policy, seal-inject) -- write to `/proc/1/fd/2`
   (sidecar PID 1 stderr). Log PASS/BLOCKED with container ID, hostname,
   image, command, and Landlock policy summary.
-- **Auth proxy** — logs every API request with model name, method, path,
+- **Auth proxy** -- logs every API request with model name, method, path,
   status, request/response sizes, and duration.
-- **Launcher** — writes START, STOP, SIGNAL, TAMPER events via the `/log`
+- **Launcher** -- writes START, STOP, SIGNAL, TAMPER events via the `/log`
   sidecar binary. Firewall changes (allow/block/reset) and image pushes
   are also logged.
-- **Tripwire** — writes TAMPER events directly to the audit file.
+- **Tripwire** -- writes TAMPER events directly to the audit file.
 
 The `/log` binary is a standalone static Go binary in the sidecar
 (FROM scratch, stdlib only). The launcher calls it via
@@ -381,7 +451,7 @@ and writes them to a persistent audit file at
 `clampdown logs -s <session>` merges and sorts all container logs
 chronologically. The agent's full conversation (tool calls, responses,
 errors) is also captured in the container logs. Use
-`--dump-agent-conversation` to include it — the output is cleaned of
+`--dump-agent-conversation` to include it -- the output is cleaned of
 ANSI escapes and TUI noise, with runtime timestamps preserved for
 correlation with audit events.
 
@@ -407,7 +477,7 @@ kernel errors into actionable instructions at the point of failure.
 │  Pre-failure prevention. Names specific tools that will fail     │
 │  (WebFetch, webfetch, web_fetch, read_url). Maps error codes     │
 │  to actions. Read by the model at conversation start.            │
-│  Weakest layer — agents forget under context pressure.           │
+│  Weakest layer -- agents forget under context pressure.          │
 ├──────────────────────────────────────────────────────────────────┤
 │  COMMAND HELPER  (sandbox_command_helper.sh, via BASH_ENV)       │
 │                                                                  │
@@ -420,13 +490,13 @@ kernel errors into actionable instructions at the point of failure.
 │  Stateless connect()/getsockopt() interceptor. Prints guidance   │
 │  to stderr on ECONNREFUSED/ETIMEDOUT from non-loopback hosts.    │
 │  Catches everything the shell helper misses: pip, npm, cargo,    │
-│  git, python scripts, Node.js HTTP — any libc connect() caller.  │
+│  git, python scripts, Node.js HTTP -- any libc connect() caller. │
 │  Does NOT intercept Go (raw syscalls) or Bun (io_uring).         │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 All three layers return the same error code unchanged. They never modify
-program behavior — only print additional stderr messages. Removing them
+program behavior -- only print additional stderr messages. Removing them
 changes nothing about what the agent can or cannot do.
 
 ---
@@ -467,18 +537,18 @@ top of the sidecar profile.
 
 All tiers include Refer (prevents EXDEV). MakeChar/MakeBlock excluded.
 
-### Masked paths (all containers — run + build)
+### Masked paths (all containers -- run + build)
 
 Enforced via containers.conf volumes on the sidecar's read-only rootfs.
 Files are masked with /dev/null bind mounts; directories with /.empty
 bind mounts. Applies uniformly to both `podman run` and `podman build`.
-The agent cannot override these — see VECTORS.md for the full bypass
+The agent cannot override these -- see VECTORS.md for the full bypass
 analysis.
 
 security-policy `checkMaskedPaths` validates defense-in-depth: each path
 must be covered by either OCI maskedPaths or a /dev/null/empty-dir bind
 mount. The check verifies mount sources are genuinely /dev/null (char
-device major 1, minor 3) or empty directories — not attacker-controlled
+device major 1, minor 3) or empty directories -- not attacker-controlled
 files.
 
 | Path | Type | Reason |
@@ -503,7 +573,7 @@ Base images pinned by SHA256 digest.
 
 | Image | File | Notes |
 |-------|------|-------|
-| Sidecar | /entrypoint | Go, static |
+| Sidecar | /entrypoint | Go, static (seccomp-notif supervisor) |
 | Sidecar | /sandbox-seal | Go, static (go-landlock, x/sys, psx) |
 | Sidecar | /rename_exdev_shim.so | C, musl -nostdlib |
 | Sidecar | seal-inject, security-policy | Go, static, stdlib only |

@@ -3,17 +3,14 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
-	"syscall"
-)
+	"os/signal"
+	"runtime"
+	"time"
 
-const (
-	iptables  = "/usr/sbin/iptables"
-	ip6tables = "/usr/sbin/ip6tables"
+	"golang.org/x/sys/unix"
 )
 
 func fatalf(format string, args ...any) {
@@ -21,199 +18,59 @@ func fatalf(format string, args ...any) {
 	os.Exit(1)
 }
 
-func bindMount(path string) error {
-	return syscall.Mount(path, path, "", syscall.MS_BIND, "")
-}
+// forwardSignals relays SIGTERM/SIGINT to the child process and reaps
+// zombies on SIGCHLD. Runs until the channel is closed.
+func forwardSignals(cmd *exec.Cmd, done <-chan struct{}) {
+	sigs := make(chan os.Signal, 4)
+	signal.Notify(sigs, unix.SIGTERM, unix.SIGINT, unix.SIGCHLD)
+	defer signal.Stop(sigs)
 
-func remountRO(path string) error {
-	return syscall.Mount("", path, "", syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY, "")
-}
-
-func remountRW(path string) error {
-	return syscall.Mount("", path, "", syscall.MS_BIND|syscall.MS_REMOUNT, "")
-}
-
-// iptRun executes an iptables/ip6tables command, forwarding stderr.
-func iptRun(bin string, args ...string) error {
-	cmd := exec.CommandContext(context.Background(), bin, args...)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-// bootstrapCgroups prepares the cgroup v2 hierarchy for nested container use.
-//
-// After mounting a fresh cgroup2 filesystem, PID 1 (this process) sits in the
-// root cgroup. Cgroup v2's "no internal processes" rule prevents enabling
-// controllers in subtree_control when processes exist in the cgroup. We must:
-//  1. Create a leaf cgroup and move ourselves into it
-//  2. Enable all available controllers in the root's subtree_control
-//
-// This makes the full controller set available to podman for nested containers.
-func bootstrapCgroups() error {
-	const cgRoot = "/sys/fs/cgroup"
-
-	// Unmount Docker/podman's read-only bind mount of the host cgroup tree.
-	err := syscall.Unmount(cgRoot, syscall.MNT_DETACH)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: unmount %s: %v\n", cgRoot, err)
-	}
-
-	// Mount a fresh cgroup2 scoped to this container's private cgroupns.
-	err = syscall.Mount("cgroup2", cgRoot, "cgroup2", 0, "nsdelegate")
-	if err != nil {
-		// Retry without nsdelegate for older kernels (<5.2).
-		err = syscall.Mount("cgroup2", cgRoot, "cgroup2", 0, "")
-		if err != nil {
-			return fmt.Errorf("mount cgroup2: %w", err)
-		}
-	}
-
-	// Read which controllers the parent delegated to us.
-	data, err := os.ReadFile(cgRoot + "/cgroup.controllers")
-	if err != nil {
-		return fmt.Errorf("read controllers: %w", err)
-	}
-	controllers := strings.Fields(strings.TrimSpace(string(data)))
-	if len(controllers) == 0 {
-		// No controllers delegated. Podman will run in a degraded mode
-		// (no resource limits on nested containers) but won't crash.
-		fmt.Fprintln(os.Stderr, "warning: no cgroup controllers delegated by host runtime")
-		return nil
-	}
-
-	// Create a leaf cgroup for the entrypoint/podman process.
-	initCgroup := cgRoot + "/init"
-	err = os.MkdirAll(initCgroup, 0o755)
-	if err != nil {
-		return fmt.Errorf("mkdir %s: %w", initCgroup, err)
-	}
-
-	// Move ourselves (PID 1) into the leaf.
-	pid := fmt.Sprintf("%d\n", os.Getpid())
-	err = os.WriteFile(initCgroup+"/cgroup.procs", []byte(pid), 0o644)
-	if err != nil {
-		return fmt.Errorf("move pid to init cgroup: %w", err)
-	}
-
-	// Enable all available controllers in the root's subtree_control.
-	// This makes them available to child cgroups (libpod_parent, etc.).
-	var enables []string
-	for _, c := range controllers {
-		enables = append(enables, "+"+c)
-	}
-
-	enableStr := strings.Join(enables, " ") + "\n"
-	err = os.WriteFile(cgRoot+"/cgroup.subtree_control", []byte(enableStr), 0o644)
-	if err != nil {
-		// Some controllers may fail individually (e.g. cpuset not delegated).
-		// Try them one at a time so partial enablement works.
-		fmt.Fprintf(os.Stderr, "warning: bulk controller enable failed (%v), trying individually\n", err)
-		for _, c := range controllers {
-			entry := "+" + c + "\n"
-			err = os.WriteFile(cgRoot+"/cgroup.subtree_control", []byte(entry), 0o644)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not enable controller %s: %v\n", c, err)
+	for {
+		select {
+		case <-done:
+			return
+		case sig := <-sigs:
+			if sig == unix.SIGCHLD {
+				reapZombies()
+				continue
+			}
+			if cmd.Process != nil {
+				_ = cmd.Process.Signal(sig)
 			}
 		}
 	}
-
-	return nil
 }
 
-// bootstrapFirewall sets a default-deny baseline. OUTPUT gets REJECT
-// (immediate failure), FORWARD gets DROP. Only loopback and established
-// connections are allowed. The launcher applies the full ruleset
-// (agent allowlist, pod chains) after the sidecar API is ready.
-func bootstrapFirewall() error {
-	for _, bin := range []string{iptables, ip6tables} {
-		rejectType := "icmp-port-unreachable"
-		if bin == ip6tables {
-			rejectType = "icmp6-port-unreachable"
-		}
-
-		// filter/OUTPUT: REJECT all, allow loopback + established.
-		err := iptRun(bin, "-F", "OUTPUT")
-		if err != nil {
-			return fmt.Errorf("%s flush OUTPUT: %w", bin, err)
-		}
-		err = iptRun(bin, "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT")
-		if err != nil {
-			return fmt.Errorf("%s loopback: %w", bin, err)
-		}
-		err = iptRun(bin, "-A", "OUTPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT")
-		if err != nil {
-			return fmt.Errorf("%s established: %w", bin, err)
-		}
-		err = iptRun(bin, "-A", "OUTPUT", "-j", "REJECT", "--reject-with", rejectType)
-		if err != nil {
-			return fmt.Errorf("%s terminal reject: %w", bin, err)
-		}
-
-		// mangle/FORWARD: DROP all, allow loopback + established.
-		err = iptRun(bin, "-t", "mangle", "-F", "FORWARD")
-		if err != nil {
-			return fmt.Errorf("%s flush FORWARD: %w", bin, err)
-		}
-		err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT")
-		if err != nil {
-			return fmt.Errorf("%s FORWARD established: %w", bin, err)
-		}
-		err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-o", "lo", "-j", "ACCEPT")
-		if err != nil {
-			return fmt.Errorf("%s FORWARD loopback: %w", bin, err)
-		}
-		err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-j", "DROP")
-		if err != nil {
-			return fmt.Errorf("%s FORWARD terminal drop: %w", bin, err)
+// reapZombies calls waitpid(-1, WNOHANG) in a loop to collect orphaned
+// child processes. As PID 1 in the container, we inherit orphans.
+func reapZombies() {
+	for {
+		var ws unix.WaitStatus
+		pid, err := unix.Wait4(-1, &ws, unix.WNOHANG, nil)
+		if pid <= 0 || err != nil {
+			break
 		}
 	}
-
-	fmt.Fprintln(os.Stderr, "firewall: baseline deny-all set")
-	return nil
 }
 
-// writeSandboxIdentity writes the host UID/GID to /run/sandbox/ for OCI
-// hooks to read. After writing, the directory is bind-mounted read-only
-// so an escaped process cannot modify the UID to escalate privileges
-// in future nested containers.
-func writeSandboxIdentity() {
-	const dir = "/run/sandbox"
-
-	uid := os.Getenv("SANDBOX_UID")
-	if uid == "" {
-		return
-	}
-	gid := os.Getenv("SANDBOX_GID")
-	if gid == "" {
-		gid = uid
-	}
-
-	err := os.MkdirAll(dir, 0o500)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: mkdir %s: %v\n", dir, err)
-		return
-	}
-	err = os.WriteFile(dir+"/uid", []byte(uid), 0o400)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: write %s/uid: %v\n", dir, err)
-	}
-	err = os.WriteFile(dir+"/gid", []byte(gid), 0o400)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: write %s/gid: %v\n", dir, err)
-	}
-
-	// Bind-mount the directory read-only so an escaped process
-	// cannot modify the UID to escalate privileges in future
-	// nested containers.
-	err = bindMount(dir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: bind mount %s: %v\n", dir, err)
-		return
-	}
-	err = remountRO(dir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: remount ro %s: %v\n", dir, err)
-	}
+// interceptedSyscalls is the list of syscalls supervised via seccomp-notif.
+//
+//   - mount, umount2, mount_setattr, move_mount -- protect masked/RO paths
+//   - open_tree -- block non-recursive clones that strip sub-mounts
+//   - fsopen, fsconfig, fsmount -- block new mount API procfs bypass
+//   - ptrace, process_vm_readv, process_vm_writev -- protect PID 1
+var interceptedSyscalls = []uint32{
+	unix.SYS_UMOUNT2,
+	unix.SYS_MOUNT,
+	unix.SYS_MOUNT_SETATTR,
+	unix.SYS_MOVE_MOUNT,
+	unix.SYS_OPEN_TREE,
+	unix.SYS_FSOPEN,
+	unix.SYS_FSCONFIG,
+	unix.SYS_FSMOUNT,
+	unix.SYS_PTRACE,
+	unix.SYS_PROCESS_VM_READV,
+	unix.SYS_PROCESS_VM_WRITEV,
 }
 
 func main() {
@@ -224,29 +81,29 @@ func main() {
 	// Unmount whatever the runtime placed over /proc/sys and remount read-only.
 	// Prevents /proc/sys/kernel/core_pattern write (host code execution via
 	// core dumps) and /proc/sys/kernel/modprobe write (arbitrary module load).
-	// Fails if nothing is mounted — not an error.
-	err := syscall.Unmount("/proc/sys", syscall.MNT_DETACH)
+	// Fails if nothing is mounted -- not an error.
+	err := unix.Unmount("/proc/sys", unix.MNT_DETACH)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: unmount /proc/sys: %v\n", err)
 	}
 
-	// /proc/sys is now real procfs — writable, namespace-scoped.
+	// /proc/sys is now real procfs -- writable, namespace-scoped.
 	// Lock it all down read-only.
-	err = bindMount("/proc/sys")
+	err = unix.Mount("/proc/sys", "/proc/sys", "", unix.MS_BIND, "")
 	if err != nil {
 		fatalf("bind /proc/sys: %v", err)
 	}
-	err = remountRO("/proc/sys")
+	err = unix.Mount("", "/proc/sys", "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, "")
 	if err != nil {
 		fatalf("remount ro /proc/sys: %v", err)
 	}
 
 	// Punch a writable hole for /proc/sys/net only (namespace-scoped, safe)
-	err = bindMount("/proc/sys/net")
+	err = unix.Mount("/proc/sys/net", "/proc/sys/net", "", unix.MS_BIND, "")
 	if err != nil {
 		fatalf("bind /proc/sys/net: %v", err)
 	}
-	err = remountRW("/proc/sys/net")
+	err = unix.Mount("", "/proc/sys/net", "", unix.MS_BIND|unix.MS_REMOUNT, "")
 	if err != nil {
 		fatalf("remount rw /proc/sys/net: %v", err)
 	}
@@ -269,9 +126,61 @@ func main() {
 	// can't modify the UID/GID to escalate privileges.
 	writeSandboxIdentity()
 
-	// exec the command — replaces this process.
-	err = syscall.Exec(os.Args[1], os.Args[1:], os.Environ())
-	if err != nil {
-		fatalf("exec %s: %v", os.Args[1], err)
+	workdir := os.Getenv("SANDBOX_WORKDIR")
+	protected := discoverProtectedPaths(workdir)
+	fmt.Fprintf(os.Stderr, "clampdown: %s seccomp-notif: protecting %d mount points\n",
+		time.Now().UTC().Format(time.RFC3339), len(protected))
+
+	// Harden PID 1 BEFORE installing the filter. The bind mount on
+	// /proc/1/mem must happen without interception -- once the filter
+	// is active, the supervisor would block it (/proc/1 is protected).
+	hardenPID1()
+
+	// Lock the OS thread BEFORE installing the filter. Without TSYNC,
+	// only this thread gets the filter. The child (podman) must be
+	// spawned from this same thread so it inherits the filter via clone().
+	runtime.LockOSThread()
+
+	filter := buildNotifFilter(auditArch, interceptedSyscalls)
+	notifFD := installFilter(filter)
+
+	if notifFD < 0 {
+		runtime.UnlockOSThread()
+		fmt.Fprintln(os.Stderr, "seccomp-notif: falling back to exec (no supervisor)")
+		execErr := unix.Exec(os.Args[1], os.Args[1:], os.Environ())
+		if execErr != nil {
+			fatalf("exec %s: %v", os.Args[1], execErr)
+		}
 	}
+
+	go runSupervisor(notifFD, protected, workdir)
+
+	cmd := exec.Command(os.Args[1], os.Args[2:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	done := make(chan struct{})
+	go forwardSignals(cmd, done)
+
+	err = cmd.Start()
+	runtime.UnlockOSThread()
+	if err != nil {
+		fatalf("start %s: %v", os.Args[1], err)
+	}
+
+	err = cmd.Wait()
+	close(done)
+
+	unix.Close(notifFD)
+	reapZombies()
+
+	exitCode := 0
+	if err != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+		if exitCode < 0 {
+			exitCode = 1
+		}
+	}
+	os.Exit(exitCode)
 }
