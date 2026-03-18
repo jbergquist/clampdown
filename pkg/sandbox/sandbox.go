@@ -270,6 +270,10 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 	if err != nil {
 		return fmt.Errorf("pod firewall: %w", err)
 	}
+	err = network.InitState(filepath.Join(p.State, "firewall.json"))
+	if err != nil {
+		return fmt.Errorf("init firewall state: %w", err)
+	}
 
 	// Start auth proxy if a proxy route is active.
 	if proxyRoute != nil {

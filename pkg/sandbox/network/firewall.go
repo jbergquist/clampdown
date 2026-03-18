@@ -4,6 +4,7 @@ package network
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -25,16 +26,67 @@ const (
 var privateV4 = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16"}
 var privateV6 = []string{"::1/128", "fc00::/7", "fe80::/10"}
 
+// FirewallEntry is a single dynamic rule (allow or block) for a host.
+type FirewallEntry struct {
+	Host   string   `json:"host"`
+	IPs    []string `json:"ips"`
+	Port   int      `json:"port"`
+	Action string   `json:"action"`
+}
+
+// FirewallState holds all dynamic firewall rules, persisted to disk.
+type FirewallState struct {
+	Agent []FirewallEntry `json:"agent"`
+	Pod   []FirewallEntry `json:"pod"`
+}
+
+// LoadState reads the firewall state file. Returns empty state if the
+// file does not exist.
+func LoadState(path string) (*FirewallState, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return &FirewallState{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read firewall state: %w", err)
+	}
+	var state FirewallState
+	err = json.Unmarshal(data, &state)
+	if err != nil {
+		return nil, fmt.Errorf("parse firewall state: %w", err)
+	}
+	return &state, nil
+}
+
+// SaveState writes the firewall state file atomically.
+func SaveState(path string, state *FirewallState) error {
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal firewall state: %w", err)
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0o644)
+}
+
+// InitState creates an empty firewall state file if it does not exist.
+func InitState(path string) error {
+	_, err := os.Stat(path)
+	if err == nil {
+		return nil
+	}
+	return SaveState(path, &FirewallState{})
+}
+
 // BuildAgentFirewall creates the full agent OUTPUT chain structure via
 // iptables-restore. Applied atomically in 2 calls (IPv4 + IPv6).
 //
-// deny mode: loopback → established → DNS (rate-limited) → private CIDRs REJECT →
+// deny mode: loopback -> established -> DNS (rate-limited) -> private CIDRs REJECT ->
 //
-//	per-IP TCP 443 ACCEPT → AGENT_ALLOW → terminal REJECT
+//	per-IP TCP 443 ACCEPT -> AGENT_ALLOW -> terminal REJECT
 //
-// allow mode: loopback → established → AGENT_ALLOW → private CIDRs REJECT →
+// allow mode: loopback -> established -> AGENT_ALLOW -> private CIDRs REJECT ->
 //
-//	AGENT_BLOCK → terminal ACCEPT
+//	AGENT_BLOCK -> terminal ACCEPT
 func BuildAgentFirewall(ctx context.Context, rt container.Runtime, sidecar string, policy string, allowIPs []string) error {
 	ip4s, ip6s := ClassifyIPs(allowIPs)
 
@@ -52,42 +104,46 @@ func BuildAgentFirewall(ctx context.Context, rt container.Runtime, sidecar strin
 			privRanges = privateV4
 		}
 
-		var r ruleBuilder
-		r.table("filter")
-		r.chain(chainAgentAllow, "-")
-		r.chain(chainAgentBlock, "-")
-		r.chain("OUTPUT", "ACCEPT") // policy ACCEPT; rules enforce deny
-		r.flush("OUTPUT")
-		r.add("OUTPUT", "-o lo -j ACCEPT")
-		r.add("OUTPUT", "-m state --state ESTABLISHED,RELATED -j ACCEPT")
+		var buf strings.Builder
+		fmt.Fprintf(&buf, "*filter\n"+
+			":%s - [0:0]\n"+
+			":%s - [0:0]\n"+
+			":OUTPUT ACCEPT [0:0]\n"+
+			"-F OUTPUT\n"+
+			"-A OUTPUT -o lo -j ACCEPT\n"+
+			"-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT\n",
+			chainAgentAllow, chainAgentBlock)
 
 		if policy == "deny" {
 			// DNS before private CIDRs: resolver may be on a private IP
 			// (10.0.2.3 slirp4netns, 192.168.x.x bridge). Rate-limited
 			// to throttle tunneling; excess dropped.
-			r.add("OUTPUT", "-p udp --dport 53 -m limit --limit 10/s --limit-burst 20 -j ACCEPT")
-			r.add("OUTPUT", "-p udp --dport 53 -j DROP")
-			r.add("OUTPUT", "-p tcp --dport 53 -m limit --limit 10/s --limit-burst 20 -j ACCEPT")
-			r.add("OUTPUT", "-p tcp --dport 53 -j DROP")
+			buf.WriteString(
+				"-A OUTPUT -p udp --dport 53 -m limit --limit 10/s --limit-burst 20 -j ACCEPT\n" +
+					"-A OUTPUT -p udp --dport 53 -j DROP\n" +
+					"-A OUTPUT -p tcp --dport 53 -m limit --limit 10/s --limit-burst 20 -j ACCEPT\n" +
+					"-A OUTPUT -p tcp --dport 53 -j DROP\n")
 			for _, cidr := range privRanges {
-				r.add("OUTPUT", fmt.Sprintf("! -o lo -d %s -j REJECT --reject-with %s", cidr, rejectType))
+				fmt.Fprintf(&buf, "-A OUTPUT ! -o lo -d %s -j REJECT --reject-with %s\n", cidr, rejectType)
 			}
 			for _, dest := range dests {
-				r.add("OUTPUT", fmt.Sprintf("-p tcp --dport 443 -d %s -j ACCEPT", dest))
+				fmt.Fprintf(&buf, "-A OUTPUT -p tcp --dport 443 -d %s -j ACCEPT\n", dest)
 			}
-			r.add("OUTPUT", fmt.Sprintf("-j %s", chainAgentAllow))
-			r.add("OUTPUT", fmt.Sprintf("-j REJECT --reject-with %s", rejectType))
+			fmt.Fprintf(&buf, "-A OUTPUT -j %s\n"+
+				"-A OUTPUT -j REJECT --reject-with %s\n",
+				chainAgentAllow, rejectType)
 		} else {
-			r.add("OUTPUT", fmt.Sprintf("-j %s", chainAgentAllow))
+			fmt.Fprintf(&buf, "-A OUTPUT -j %s\n", chainAgentAllow)
 			for _, cidr := range privRanges {
-				r.add("OUTPUT", fmt.Sprintf("! -o lo -d %s -j REJECT --reject-with %s", cidr, rejectType))
+				fmt.Fprintf(&buf, "-A OUTPUT ! -o lo -d %s -j REJECT --reject-with %s\n", cidr, rejectType)
 			}
-			r.add("OUTPUT", fmt.Sprintf("-j %s", chainAgentBlock))
-			r.add("OUTPUT", "-j ACCEPT")
+			fmt.Fprintf(&buf, "-A OUTPUT -j %s\n"+
+				"-A OUTPUT -j ACCEPT\n",
+				chainAgentBlock)
 		}
-		r.commit()
+		buf.WriteString("COMMIT\n")
 
-		out, err := rt.ExecStdin(ctx, sidecar, []string{restoreBin, "--noflush"}, r.bytes())
+		out, err := rt.ExecStdin(ctx, sidecar, []string{restoreBin, "--noflush"}, []byte(buf.String()))
 		if err != nil {
 			return fmt.Errorf("%s restore: %w: %s", restoreBin, err, out)
 		}
@@ -103,11 +159,11 @@ func BuildAgentFirewall(ctx context.Context, rt container.Runtime, sidecar strin
 // BuildPodFirewall creates the full pod FORWARD chain structure via
 // iptables-restore. Applied atomically in 2 calls (IPv4 + IPv6).
 //
-// allow mode: established → loopback → POD_ALLOW → private CIDRs DROP →
+// allow mode: established -> loopback -> POD_ALLOW -> private CIDRs DROP ->
 //
-//	POD_BLOCK → ACCEPT
+//	POD_BLOCK -> ACCEPT
 //
-// deny mode: established → loopback → DNS ACCEPT → POD_ALLOW → DROP.
+// deny mode: established -> loopback -> DNS ACCEPT -> POD_ALLOW -> DROP.
 func BuildPodFirewall(ctx context.Context, rt container.Runtime, sidecar string, policy string) error {
 	for _, bin := range []string{binIPT4, binIPT6} {
 		var privRanges []string
@@ -119,30 +175,33 @@ func BuildPodFirewall(ctx context.Context, rt container.Runtime, sidecar string,
 			privRanges = privateV4
 		}
 
-		var r ruleBuilder
-		r.table("mangle")
-		r.chain(chainPodAllow, "-")
-		r.chain(chainPodBlock, "-")
-		r.flush("FORWARD")
-		r.add("FORWARD", "-m state --state ESTABLISHED,RELATED -j ACCEPT")
-		r.add("FORWARD", "-o lo -j ACCEPT")
+		var buf strings.Builder
+		fmt.Fprintf(&buf, "*mangle\n"+
+			":%s - [0:0]\n"+
+			":%s - [0:0]\n"+
+			"-F FORWARD\n"+
+			"-A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT\n"+
+			"-A FORWARD -o lo -j ACCEPT\n",
+			chainPodAllow, chainPodBlock)
 
 		if policy == "allow" {
-			r.add("FORWARD", fmt.Sprintf("-j %s", chainPodAllow))
+			fmt.Fprintf(&buf, "-A FORWARD -j %s\n", chainPodAllow)
 			for _, cidr := range privRanges {
-				r.add("FORWARD", fmt.Sprintf("! -o lo -d %s -j DROP", cidr))
+				fmt.Fprintf(&buf, "-A FORWARD ! -o lo -d %s -j DROP\n", cidr)
 			}
-			r.add("FORWARD", fmt.Sprintf("-j %s", chainPodBlock))
-			r.add("FORWARD", "-j ACCEPT")
+			fmt.Fprintf(&buf, "-A FORWARD -j %s\n"+
+				"-A FORWARD -j ACCEPT\n",
+				chainPodBlock)
 		} else {
-			r.add("FORWARD", "-p udp --dport 53 -j ACCEPT")
-			r.add("FORWARD", "-p tcp --dport 53 -j ACCEPT")
-			r.add("FORWARD", fmt.Sprintf("-j %s", chainPodAllow))
-			r.add("FORWARD", "-j DROP")
+			fmt.Fprintf(&buf, "-A FORWARD -p udp --dport 53 -j ACCEPT\n"+
+				"-A FORWARD -p tcp --dport 53 -j ACCEPT\n"+
+				"-A FORWARD -j %s\n"+
+				"-A FORWARD -j DROP\n",
+				chainPodAllow)
 		}
-		r.commit()
+		buf.WriteString("COMMIT\n")
 
-		out, err := rt.ExecStdin(ctx, sidecar, []string{restoreBin, "--noflush"}, r.bytes())
+		out, err := rt.ExecStdin(ctx, sidecar, []string{restoreBin, "--noflush"}, []byte(buf.String()))
 		if err != nil {
 			return fmt.Errorf("%s restore: %w: %s", restoreBin, err, out)
 		}
@@ -153,180 +212,253 @@ func BuildPodFirewall(ctx context.Context, rt container.Runtime, sidecar string,
 	return nil
 }
 
-// ruleBuilder generates iptables-restore format rules.
-type ruleBuilder struct {
-	buf strings.Builder
+// AgentAllow sets a host to ACCEPT in the agent firewall.
+// Port defaults to 443 if empty.
+func AgentAllow(ctx context.Context, rt container.Runtime, sidecar, statePath string, targets []string, port int) error {
+	return modifyState(ctx, rt, sidecar, statePath, "agent", "ACCEPT", targets, port)
 }
 
-func (r *ruleBuilder) table(name string)              { fmt.Fprintf(&r.buf, "*%s\n", name) }
-func (r *ruleBuilder) chain(name, policy string)      { fmt.Fprintf(&r.buf, ":%s %s [0:0]\n", name, policy) }
-func (r *ruleBuilder) flush(chain string)             { fmt.Fprintf(&r.buf, "-F %s\n", chain) }
-func (r *ruleBuilder) add(chain, rule string)         { fmt.Fprintf(&r.buf, "-A %s %s\n", chain, rule) }
-func (r *ruleBuilder) commit()                        { r.buf.WriteString("COMMIT\n") }
-func (r *ruleBuilder) bytes() []byte                  { return []byte(r.buf.String()) }
-
-// AgentAllow adds ACCEPT rules to AGENT_ALLOW (filter table).
-func AgentAllow(ctx context.Context, rt container.Runtime, sidecar string, targets []string, ports string) error {
-	return modifyChain(ctx, rt, sidecar, "filter", chainAgentAllow, "ACCEPT", targets, ports)
+// AgentBlock sets a host to REJECT in the agent firewall.
+// Port 0 means all ports.
+func AgentBlock(ctx context.Context, rt container.Runtime, sidecar, statePath string, targets []string, port int) error {
+	return modifyState(ctx, rt, sidecar, statePath, "agent", "REJECT", targets, port)
 }
 
-// AgentBlock adds REJECT rules to AGENT_BLOCK (filter table).
-// REJECT gives the agent immediate "connection refused" instead of a timeout.
-func AgentBlock(ctx context.Context, rt container.Runtime, sidecar string, targets []string, ports string) error {
-	return modifyChain(ctx, rt, sidecar, "filter", chainAgentBlock, "REJECT", targets, ports)
+// PodAllow sets a host to ACCEPT in the pod firewall.
+// Port defaults to 443 if empty.
+func PodAllow(ctx context.Context, rt container.Runtime, sidecar, statePath string, targets []string, port int) error {
+	return modifyState(ctx, rt, sidecar, statePath, "pod", "ACCEPT", targets, port)
 }
 
-// PodAllow adds ACCEPT rules to POD_ALLOW (mangle table).
-func PodAllow(ctx context.Context, rt container.Runtime, sidecar string, targets []string, ports string) error {
-	return modifyChain(ctx, rt, sidecar, "mangle", chainPodAllow, "ACCEPT", targets, ports)
+// PodBlock sets a host to DROP in the pod firewall.
+// Port 0 means all ports.
+func PodBlock(ctx context.Context, rt container.Runtime, sidecar, statePath string, targets []string, port int) error {
+	return modifyState(ctx, rt, sidecar, statePath, "pod", "DROP", targets, port)
 }
 
-// PodBlock adds DROP rules to POD_BLOCK (mangle table).
-func PodBlock(ctx context.Context, rt container.Runtime, sidecar string, targets []string, ports string) error {
-	return modifyChain(ctx, rt, sidecar, "mangle", chainPodBlock, "DROP", targets, ports)
-}
-
-// ListRules prints all four dynamic chains grouped by Agent and Pods.
-func ListRules(ctx context.Context, rt container.Runtime, sidecar string) error {
-	fmt.Fprintln(os.Stderr, "=== Agent ===")
-	allowed := listChain(ctx, rt, sidecar, "filter", chainAgentAllow)
-	blocked := listChain(ctx, rt, sidecar, "filter", chainAgentBlock)
-	if len(allowed) == 0 && len(blocked) == 0 {
-		fmt.Fprintln(os.Stderr, "  (defaults only)")
-	} else {
-		printRules("Allowed", allowed)
-		printRules("Blocked", blocked)
+// ListRules prints dynamic rules from the state file.
+func ListRules(statePath string) error {
+	state, err := LoadState(statePath)
+	if err != nil {
+		return err
 	}
+
+	fmt.Fprintln(os.Stderr, "=== Agent ===")
+	printStateRules(state.Agent)
 
 	fmt.Fprintln(os.Stderr, "\n=== Pods ===")
-	allowed = listChain(ctx, rt, sidecar, "mangle", chainPodAllow)
-	blocked = listChain(ctx, rt, sidecar, "mangle", chainPodBlock)
+	printStateRules(state.Pod)
+
+	return nil
+}
+
+func printStateRules(entries []FirewallEntry) {
+	var allowed, blocked []FirewallEntry
+	for _, e := range entries {
+		if e.Action == "ACCEPT" {
+			allowed = append(allowed, e)
+		} else {
+			blocked = append(blocked, e)
+		}
+	}
+
 	if len(allowed) == 0 && len(blocked) == 0 {
 		fmt.Fprintln(os.Stderr, "  (defaults only)")
-		return nil
-	}
-
-	printRules("Allowed", allowed)
-	printRules("Blocked", blocked)
-
-	return nil
-}
-
-func printRules(label string, rules []string) {
-	if len(rules) == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "  %s:\n", label)
-	for _, r := range rules {
-		fmt.Fprintf(os.Stderr, "    %s\n", r)
-	}
-}
 
-// AgentReset flushes AGENT_ALLOW and AGENT_BLOCK chains.
-func AgentReset(ctx context.Context, rt container.Runtime, sidecar string) error {
-	return flushChains(ctx, rt, sidecar, "filter", chainAgentAllow, chainAgentBlock)
-}
-
-// PodReset flushes POD_ALLOW and POD_BLOCK chains.
-func PodReset(ctx context.Context, rt container.Runtime, sidecar string) error {
-	return flushChains(ctx, rt, sidecar, "mangle", chainPodAllow, chainPodBlock)
-}
-
-func flushChains(ctx context.Context, rt container.Runtime, sidecar, table string, chains ...string) error {
-	for _, bin := range []string{"/usr/sbin/iptables", "/usr/sbin/ip6tables"} {
-		for _, chain := range chains {
-			_, err := rt.Exec(ctx, sidecar, []string{bin, "-t", table, "-F", chain}, nil)
-			if err != nil {
-				return fmt.Errorf("%s flush %s/%s: %w", bin, table, chain, err)
-			}
+	if len(allowed) > 0 {
+		fmt.Fprintln(os.Stderr, "  Allowed:")
+		for _, e := range allowed {
+			fmt.Fprintf(os.Stderr, "    %s (%s) :%s\n", e.Host, strings.Join(e.IPs, ", "), portStr(e.Port))
 		}
 	}
-	msg := fmt.Sprintf("RESET: table=%s chains=%v", table, chains)
-	_ = rt.Log(ctx, sidecar, "firewall", msg)
-	slog.Info("reset dynamic rules", "table", table)
+	if len(blocked) > 0 {
+		fmt.Fprintln(os.Stderr, "  Blocked:")
+		for _, e := range blocked {
+			fmt.Fprintf(os.Stderr, "    %s (%s) :%s\n", e.Host, strings.Join(e.IPs, ", "), portStr(e.Port))
+		}
+	}
+}
+
+// AgentReset clears all dynamic agent rules.
+func AgentReset(ctx context.Context, rt container.Runtime, sidecar, statePath string) error {
+	state, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	state.Agent = nil
+	err = SaveState(statePath, state)
+	if err != nil {
+		return err
+	}
+	err = reconcile(ctx, rt, sidecar, state, "agent")
+	if err != nil {
+		return err
+	}
+	_ = rt.Log(ctx, sidecar, "firewall", "RESET: scope=agent")
+	slog.Info("reset dynamic rules", "scope", "agent")
 	return nil
 }
 
-func modifyChain(
-	ctx context.Context, rt container.Runtime, sidecar string,
-	table, chain, verdict string,
-	targets []string, ports string,
+// PodReset clears all dynamic pod rules.
+func PodReset(ctx context.Context, rt container.Runtime, sidecar, statePath string) error {
+	state, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	state.Pod = nil
+	err = SaveState(statePath, state)
+	if err != nil {
+		return err
+	}
+	err = reconcile(ctx, rt, sidecar, state, "pod")
+	if err != nil {
+		return err
+	}
+	_ = rt.Log(ctx, sidecar, "firewall", "RESET: scope=pod")
+	slog.Info("reset dynamic rules", "scope", "pod")
+	return nil
+}
+
+// modifyState updates the state file and reconciles iptables.
+func modifyState(
+	ctx context.Context, rt container.Runtime, sidecar, statePath string,
+	scope, action string, targets []string, port int,
 ) error {
-	resolved := ResolveAllowlist(targets)
-	if len(resolved) == 0 {
-		return fmt.Errorf("no IPs resolved for %v", targets)
+	state, err := LoadState(statePath)
+	if err != nil {
+		return err
 	}
-	ip4s, ip6s := ClassifyIPs(resolved)
-	count := 0
-	for _, ip := range ip4s {
-		err := iptExec(ctx, rt, sidecar, "/usr/sbin/iptables", table, chain, verdict, ip, ports)
-		if err != nil {
-			return err
+
+	for _, target := range targets {
+		resolved := ResolveAllowlist([]string{target})
+		if len(resolved) == 0 {
+			return fmt.Errorf("no IPs resolved for %s", target)
 		}
-		count++
-	}
-	for _, ip := range ip6s {
-		err := iptExec(ctx, rt, sidecar, "/usr/sbin/ip6tables", table, chain, verdict, ip, ports)
-		if err != nil {
-			return err
+
+		entry := FirewallEntry{
+			Host:   target,
+			IPs:    resolved,
+			Port:   port,
+			Action: action,
 		}
-		count++
+
+		entries := scopeEntries(state, scope)
+		found := false
+		for i, e := range *entries {
+			if e.Host == target {
+				(*entries)[i] = entry
+				found = true
+				break
+			}
+		}
+		if !found {
+			*entries = append(*entries, entry)
+		}
 	}
-	msg := fmt.Sprintf("%s: chain=%s targets=%s ports=%s count=%d",
-		verdict, chain, strings.Join(targets, ","), ports, count)
-	_ = rt.Log(ctx, sidecar, "firewall", msg)
+
+	err = SaveState(statePath, state)
+	if err != nil {
+		return err
+	}
+	err = reconcile(ctx, rt, sidecar, state, scope)
+	if err != nil {
+		return err
+	}
+
+	_ = rt.Log(ctx, sidecar, "firewall",
+		fmt.Sprintf("%s: scope=%s targets=%s port=%s",
+			action, scope, strings.Join(targets, ","), portStr(port)))
 	slog.Info("applied firewall rules",
-		"verdict", verdict,
-		"count", count,
-		"table", table,
-		"chain", chain,
-		"targets", strings.Join(targets, ", "))
+		"action", action, "scope", scope,
+		"targets", strings.Join(targets, ", "), "port", portStr(port))
 	return nil
 }
 
-func iptExec(
-	ctx context.Context, rt container.Runtime, sidecar string,
-	bin, table, chain, verdict, dest, ports string,
-) error {
-	args := []string{bin, "-t", table, "-A", chain, "-d", dest}
-	portList := strings.Split(ports, ",")
-	if len(portList) == 1 {
-		args = append(args, "-p", "tcp", "--dport", portList[0])
-	} else {
-		args = append(args, "-p", "tcp", "-m", "multiport", "--dports", ports)
+func scopeEntries(state *FirewallState, scope string) *[]FirewallEntry {
+	if scope == "pod" {
+		return &state.Pod
 	}
-	if verdict == "REJECT" {
-		rejectType := "icmp-port-unreachable"
-		if strings.Contains(bin, "ip6") {
-			rejectType = "icmp6-port-unreachable"
-		}
-		args = append(args, "-j", "REJECT", "--reject-with", rejectType)
-	} else {
-		args = append(args, "-j", verdict)
-	}
-	_, err := rt.Exec(ctx, sidecar, args, nil)
-	return err
+	return &state.Agent
 }
 
-func listChain(ctx context.Context, rt container.Runtime, sidecar, table, chain string) []string {
-	var rules []string
-	for _, bin := range []string{"/usr/sbin/iptables", "/usr/sbin/ip6tables"} {
-		out, err := rt.Exec(ctx, sidecar, []string{
-			bin, "-t", table, "-L", chain, "-n", "--line-numbers",
-		}, nil)
-		if err != nil {
-			continue
+func portStr(port int) string {
+	if port == 0 {
+		return "*"
+	}
+	return fmt.Sprintf("%d", port)
+}
+
+// reconcile flushes the dynamic chains for a scope and rebuilds them
+// from the state file using iptables-restore for atomicity.
+func reconcile(ctx context.Context, rt container.Runtime, sidecar string, state *FirewallState, scope string) error {
+	var table, allowChain, blockChain string
+	var entries []FirewallEntry
+	if scope == "pod" {
+		table = "mangle"
+		allowChain = chainPodAllow
+		blockChain = chainPodBlock
+		entries = state.Pod
+	} else {
+		table = "filter"
+		allowChain = chainAgentAllow
+		blockChain = chainAgentBlock
+		entries = state.Agent
+	}
+
+	for _, bin := range []string{binIPT4, binIPT6} {
+		isV6 := strings.Contains(bin, "ip6")
+		restoreBin := "/usr/sbin/iptables-restore"
+		if isV6 {
+			restoreBin = "/usr/sbin/ip6tables-restore"
 		}
-		ipVer := "IPv4"
-		if strings.Contains(bin, "ip6") {
-			ipVer = "IPv6"
-		}
-		for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-			if strings.HasPrefix(line, "Chain") || strings.HasPrefix(line, "num") || strings.TrimSpace(line) == "" {
-				continue
+
+		var buf strings.Builder
+		fmt.Fprintf(&buf, "*%s\n"+
+			":%s - [0:0]\n"+
+			":%s - [0:0]\n"+
+			"-F %s\n"+
+			"-F %s\n",
+			table, allowChain, blockChain, allowChain, blockChain)
+
+		for _, e := range entries {
+			ip4s, ip6s := ClassifyIPs(e.IPs)
+			ips := ip4s
+			if isV6 {
+				ips = ip6s
 			}
-			rules = append(rules, fmt.Sprintf("[%s] %s", ipVer, line))
+
+			chain := allowChain
+			if e.Action != "ACCEPT" {
+				chain = blockChain
+			}
+
+			rejectSuffix := ""
+			if e.Action == "REJECT" {
+				rejectType := "icmp-port-unreachable"
+				if isV6 {
+					rejectType = "icmp6-port-unreachable"
+				}
+				rejectSuffix = " --reject-with " + rejectType
+			}
+
+			for _, ip := range ips {
+				portRule := ""
+				if e.Port > 0 {
+					portRule = fmt.Sprintf(" -p tcp --dport %d", e.Port)
+				}
+				fmt.Fprintf(&buf, "-A %s -d %s%s -j %s%s\n", chain, ip, portRule, e.Action, rejectSuffix)
+			}
+		}
+
+		buf.WriteString("COMMIT\n")
+
+		out, err := rt.ExecStdin(ctx, sidecar, []string{restoreBin, "--noflush"}, []byte(buf.String()))
+		if err != nil {
+			return fmt.Errorf("reconcile %s: %w: %s", scope, err, out)
 		}
 	}
-	return rules
+
+	return nil
 }

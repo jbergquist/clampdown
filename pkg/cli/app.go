@@ -273,11 +273,10 @@ func sessionFlag() *ucli.StringFlag {
 	}
 }
 
-func portFlag() *ucli.StringFlag {
-	return &ucli.StringFlag{
-		Name:     "port",
-		Usage:    "Port(s) to allow/block (comma-separated, e.g. 443 or 80,443)",
-		Required: true,
+func portFlag() *ucli.IntFlag {
+	return &ucli.IntFlag{
+		Name:  "port",
+		Usage: "Port to allow/block (default: 443 for allow, all ports for block)",
 	}
 }
 
@@ -458,7 +457,15 @@ func networkAgentAllow(ctx context.Context, cmd *ucli.Command) error {
 	if len(targets) == 0 {
 		return errors.New("at least one host/IP/CIDR required")
 	}
-	return network.AgentAllow(ctx, rt, sidecar, targets, cmd.String("port"))
+	statePath, err := findStatePath(ctx, rt, sidecar)
+	if err != nil {
+		return err
+	}
+	port := int(cmd.Int("port"))
+	if port == 0 {
+		port = 443
+	}
+	return network.AgentAllow(ctx, rt, sidecar, statePath, targets, port)
 }
 
 func networkAgentBlock(ctx context.Context, cmd *ucli.Command) error {
@@ -470,7 +477,11 @@ func networkAgentBlock(ctx context.Context, cmd *ucli.Command) error {
 	if len(targets) == 0 {
 		return errors.New("at least one host/IP/CIDR required")
 	}
-	return network.AgentBlock(ctx, rt, sidecar, targets, cmd.String("port"))
+	statePath, err := findStatePath(ctx, rt, sidecar)
+	if err != nil {
+		return err
+	}
+	return network.AgentBlock(ctx, rt, sidecar, statePath, targets, int(cmd.Int("port")))
 }
 
 func networkPodAllow(ctx context.Context, cmd *ucli.Command) error {
@@ -482,7 +493,15 @@ func networkPodAllow(ctx context.Context, cmd *ucli.Command) error {
 	if len(targets) == 0 {
 		return errors.New("at least one host/IP/CIDR required")
 	}
-	return network.PodAllow(ctx, rt, sidecar, targets, cmd.String("port"))
+	statePath, err := findStatePath(ctx, rt, sidecar)
+	if err != nil {
+		return err
+	}
+	port := int(cmd.Int("port"))
+	if port == 0 {
+		port = 443
+	}
+	return network.PodAllow(ctx, rt, sidecar, statePath, targets, port)
 }
 
 func networkPodBlock(ctx context.Context, cmd *ucli.Command) error {
@@ -494,7 +513,11 @@ func networkPodBlock(ctx context.Context, cmd *ucli.Command) error {
 	if len(targets) == 0 {
 		return errors.New("at least one host/IP/CIDR required")
 	}
-	return network.PodBlock(ctx, rt, sidecar, targets, cmd.String("port"))
+	statePath, err := findStatePath(ctx, rt, sidecar)
+	if err != nil {
+		return err
+	}
+	return network.PodBlock(ctx, rt, sidecar, statePath, targets, int(cmd.Int("port")))
 }
 
 func networkAgentReset(ctx context.Context, cmd *ucli.Command) error {
@@ -502,7 +525,11 @@ func networkAgentReset(ctx context.Context, cmd *ucli.Command) error {
 	if err != nil {
 		return err
 	}
-	return network.AgentReset(ctx, rt, sidecar)
+	statePath, err := findStatePath(ctx, rt, sidecar)
+	if err != nil {
+		return err
+	}
+	return network.AgentReset(ctx, rt, sidecar, statePath)
 }
 
 func networkPodReset(ctx context.Context, cmd *ucli.Command) error {
@@ -510,7 +537,11 @@ func networkPodReset(ctx context.Context, cmd *ucli.Command) error {
 	if err != nil {
 		return err
 	}
-	return network.PodReset(ctx, rt, sidecar)
+	statePath, err := findStatePath(ctx, rt, sidecar)
+	if err != nil {
+		return err
+	}
+	return network.PodReset(ctx, rt, sidecar, statePath)
 }
 
 func networkList(ctx context.Context, cmd *ucli.Command) error {
@@ -518,7 +549,41 @@ func networkList(ctx context.Context, cmd *ucli.Command) error {
 	if err != nil {
 		return err
 	}
-	return network.ListRules(ctx, rt, sidecar)
+	statePath, err := findStatePath(ctx, rt, sidecar)
+	if err != nil {
+		return err
+	}
+	return network.ListRules(statePath)
+}
+
+// findStatePath discovers the firewall state file for a session by reading
+// the sidecar container's workdir label and computing the state directory.
+func findStatePath(ctx context.Context, rt container.Runtime, sidecar string) (string, error) {
+	// Extract session ID from sidecar name to find its labels.
+	sessionID := ""
+	parts := strings.Split(sidecar, "-")
+	if len(parts) >= 2 {
+		sessionID = parts[1]
+	}
+	if sessionID == "" {
+		return "", fmt.Errorf("cannot extract session ID from sidecar name %q", sidecar)
+	}
+
+	containers, err := rt.List(ctx, map[string]string{"clampdown.session": sessionID})
+	if err != nil {
+		return "", fmt.Errorf("list containers: %w", err)
+	}
+
+	for _, c := range containers {
+		workdir := c.Labels["clampdown.workdir"]
+		if workdir == "" {
+			continue
+		}
+		paths := sandbox.GenPaths(rt.Name(), workdir)
+		return filepath.Join(paths.State, "firewall.json"), nil
+	}
+
+	return "", fmt.Errorf("no container with workdir label found for session %s", sessionID)
 }
 
 func imagePush(ctx context.Context, cmd *ucli.Command) error {
