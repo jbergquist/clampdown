@@ -40,22 +40,3 @@ updates:
     schedule:
       interval: weekly
 
-  - package-ecosystem: docker
-    directory: /container-images/sidecar
-    schedule:
-      interval: weekly
-
-  - package-ecosystem: docker
-    directory: /container-images/claude
-    schedule:
-      interval: weekly
-
-  - package-ecosystem: docker
-    directory: /container-images/opencode
-    schedule:
-      interval: weekly
-
-  - package-ecosystem: docker
-    directory: /container-images/proxy
-    schedule:
-      interval: weekly
