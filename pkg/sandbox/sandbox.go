@@ -29,8 +29,9 @@ import (
 const (
 	containerPrefix  = AppName
 	readinessTimeout = 5
-	sidecarPIDLimit  = 512
 	agentPIDLimit    = 2048
+	proxyPIDLimit    = 512
+	sidecarPIDLimit  = 4096
 )
 
 // Options configures a sandbox run.

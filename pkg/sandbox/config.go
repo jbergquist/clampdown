@@ -425,7 +425,7 @@ func ProxyConfig(
 		Env:            env,
 		SeccompProfile: seccompPath,
 		Resources: container.Resources{
-			Memory: "128m", CPUs: "1", PIDLimit: 32,
+			Memory: "128m", CPUs: "1", PIDLimit: proxyPIDLimit,
 		},
 	}
 }
