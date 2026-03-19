@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
-CTR ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null || command -v nerdctl 2>/dev/null)
+CTR    ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null || command -v nerdctl 2>/dev/null)
+GOARCH ?= $(shell go env GOARCH)
 
 SIDECAR_IMAGE  := clampdown-sidecar:latest
 CLAUDE_IMAGE   := clampdown-claude:latest
@@ -45,11 +46,11 @@ lint:
 	@golangci-lint run ./...
 
 test:
-	go test -v ./pkg/...
-	cd container-images/sidecar/entrypoint && go test -v .
-	cd container-images/sidecar/seal && go test -v .
-	cd container-images/sidecar/hooks/createRuntime && go test -v .
-	cd container-images/sidecar/hooks/precreate && go test -v .
+	go test -v -race ./pkg/...
+	cd container-images/sidecar/entrypoint && go test -v -race .
+	cd container-images/sidecar/seal && go test -v -race .
+	cd container-images/sidecar/hooks/createRuntime && go test -v -race .
+	cd container-images/sidecar/hooks/precreate && go test -v -race .
 
 # Integration tests need these images on the host (pushed into sidecar at test start).
 INTEG_IMAGES := alpine python:alpine
@@ -107,7 +108,7 @@ opencode: .opencode.stamp
 proxy: .proxy.stamp
 
 launcher:
-	CGO_ENABLED=0 go build -ldflags='-s -w' -o clampdown .
+	CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o clampdown .
 
 install: launcher
 	install -Dm755 clampdown ~/.local/bin/clampdown
