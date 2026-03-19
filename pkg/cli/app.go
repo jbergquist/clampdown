@@ -318,23 +318,23 @@ func runAgent(agName string, cfg Config) ucli.ActionFunc {
 		}
 
 		opts := sandbox.Options{
-			AgentAllow:      cmd.String("agent-allow"),
-			AgentArgs:       cmd.Args().Slice(),
-			AgentPolicy:     cmd.String("agent-policy"),
-			AllowHooks:      cmd.Bool("allow-hooks"),
-			CPUs:            cmd.String("cpus"),
-			EnableTripwire:  cmd.Bool("tripwire"),
-			GH:              cmd.Bool("gh"),
-			GitConfig:       cmd.Bool("gitconfig"),
-			MaskPaths:       append(cfg.MaskPaths, cmd.StringSlice("mask")...),
-			Memory:          cmd.String("memory"),
-			PodPolicy:       cmd.String("pod-policy"),
-			ProtectPaths:    append(cfg.ProtectPaths, cmd.StringSlice("protect")...),
-			RegistryAuth:    cmd.Bool("registry-auth"),
-			RequireDigest:   cmd.String("require-digest"),
-			SSH:             cmd.Bool("ssh"),
-			UnmaskPaths:     append(cfg.UnmaskPaths, cmd.StringSlice("unmask")...),
-			Workdir:         workdir,
+			AgentAllow:     cmd.String("agent-allow"),
+			AgentArgs:      cmd.Args().Slice(),
+			AgentPolicy:    cmd.String("agent-policy"),
+			AllowHooks:     cmd.Bool("allow-hooks"),
+			CPUs:           cmd.String("cpus"),
+			EnableTripwire: cmd.Bool("tripwire"),
+			GH:             cmd.Bool("gh"),
+			GitConfig:      cmd.Bool("gitconfig"),
+			MaskPaths:      append(cfg.MaskPaths, cmd.StringSlice("mask")...),
+			Memory:         cmd.String("memory"),
+			PodPolicy:      cmd.String("pod-policy"),
+			ProtectPaths:   append(cfg.ProtectPaths, cmd.StringSlice("protect")...),
+			RegistryAuth:   cmd.Bool("registry-auth"),
+			RequireDigest:  cmd.String("require-digest"),
+			SSH:            cmd.Bool("ssh"),
+			UnmaskPaths:    append(cfg.UnmaskPaths, cmd.StringSlice("unmask")...),
+			Workdir:        workdir,
 		}
 
 		return sandbox.Run(ctx, rt, ag, opts)
@@ -407,7 +407,7 @@ func showLogs(ctx context.Context, cmd *ucli.Command) error {
 	for _, line := range lines {
 		stripped := sandbox.StripRuntimeTimestamp(line)
 		if strings.HasPrefix(stripped, "clampdown:") {
-			fmt.Println(stripped)
+			fmt.Fprintln(os.Stdout, stripped)
 		} else {
 			// Agent line: keep runtime timestamp for postmortem
 			// correlation. Strip ANSI escapes, replace control
@@ -420,7 +420,7 @@ func showLogs(ctx context.Context, cmd *ucli.Command) error {
 			if utf8.RuneCountInString(content) < 4 {
 				continue
 			}
-			fmt.Println(clean)
+			fmt.Fprintln(os.Stdout, clean)
 		}
 	}
 	return nil
@@ -461,7 +461,7 @@ func networkAgentAllow(ctx context.Context, cmd *ucli.Command) error {
 	if err != nil {
 		return err
 	}
-	port := int(cmd.Int("port"))
+	port := cmd.Int("port")
 	if port == 0 {
 		port = 443
 	}
@@ -481,7 +481,7 @@ func networkAgentBlock(ctx context.Context, cmd *ucli.Command) error {
 	if err != nil {
 		return err
 	}
-	return network.AgentBlock(ctx, rt, sidecar, statePath, targets, int(cmd.Int("port")))
+	return network.AgentBlock(ctx, rt, sidecar, statePath, targets, cmd.Int("port"))
 }
 
 func networkPodAllow(ctx context.Context, cmd *ucli.Command) error {
@@ -497,7 +497,7 @@ func networkPodAllow(ctx context.Context, cmd *ucli.Command) error {
 	if err != nil {
 		return err
 	}
-	port := int(cmd.Int("port"))
+	port := cmd.Int("port")
 	if port == 0 {
 		port = 443
 	}
@@ -517,7 +517,7 @@ func networkPodBlock(ctx context.Context, cmd *ucli.Command) error {
 	if err != nil {
 		return err
 	}
-	return network.PodBlock(ctx, rt, sidecar, statePath, targets, int(cmd.Int("port")))
+	return network.PodBlock(ctx, rt, sidecar, statePath, targets, cmd.Int("port"))
 }
 
 func networkAgentReset(ctx context.Context, cmd *ucli.Command) error {

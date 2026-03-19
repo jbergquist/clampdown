@@ -141,7 +141,11 @@ func applyLandlock(p policy) error {
 		return fmt.Errorf("Landlock not available (kernel < 5.13) — refusing to run without filesystem access control")
 	}
 	if abi < 3 {
-		return fmt.Errorf("Landlock ABI V%d too old (need V%d+, kernel 6.2+) — refusing to run without Refer and Truncate support", abi, 3)
+		return fmt.Errorf(
+			"Landlock ABI V%d too old (need V%d+, kernel 6.2+) — refusing to run without Refer and Truncate support",
+			abi,
+			3,
+		)
 	}
 
 	var fsRules []landlock.Rule

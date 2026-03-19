@@ -233,7 +233,12 @@ func findAuthFile() string {
 // The sidecar's RO overlays also propagate into nested containers via
 // recursive bind mounts (rbind), so nested containers inherit protection
 // without needing seal-inject changes.
-func SidecarProtectedPaths(workdir string, allowHooks bool, extra []string, masked []agent.MaskedPath) []container.MountSpec {
+func SidecarProtectedPaths(
+	workdir string,
+	allowHooks bool,
+	extra []string,
+	masked []agent.MaskedPath,
+) []container.MountSpec {
 	paths := mounts.MergeProtection(allowHooks)
 	for _, raw := range extra {
 		paths = append(paths, agent.ProtectedPath{
@@ -399,12 +404,12 @@ func ProxyConfig(
 	keyValue, _ := resolveKey(route.KeyEnv, rcEnv)
 
 	env := map[string]string{
-		"PROXY_PORT":          fmt.Sprintf("%d", route.Port),
+		"PROXY_PORT":          strconv.FormatUint(uint64(route.Port), 10),
 		"PROXY_UPSTREAM":      route.Upstream,
 		"PROXY_HEADER_NAME":   route.HeaderName,
 		"PROXY_HEADER_PREFIX": route.HeaderPrefix,
 		"PROXY_KEY":           keyValue,
-		"GOMAXPROCS": "2",
+		"GOMAXPROCS":          "2",
 	}
 
 	// Landlock policy for the proxy: read-only filesystem, execute

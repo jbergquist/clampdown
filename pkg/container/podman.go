@@ -81,6 +81,8 @@ func (p *Podman) StartSidecar(ctx context.Context, cfg SidecarContainerConfig) e
 	// Masked paths — DevNull/EmptyRO overlays hiding secret content.
 	for _, m := range cfg.MaskedPaths {
 		switch m.Type {
+		case Bind:
+			// Bind-type masked paths are not used; masks are always DevNull or EmptyRO.
 		case DevNull:
 			args = append(args, "-v", "/dev/null:"+m.Dest+":ro")
 		case EmptyRO:

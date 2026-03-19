@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +29,7 @@ type landlockPolicy struct {
 	ReadOnly    []string `json:"read_only"`
 	WriteNoExec []string `json:"write_noexec"`
 	WriteExec   []string `json:"write_exec"`
-	ConnectTCP []uint16 `json:"connect_tcp"`
+	ConnectTCP  []uint16 `json:"connect_tcp"`
 }
 
 type mount struct {
@@ -107,12 +108,7 @@ func isInfraMount(m mount) bool {
 }
 
 func hasOption(opts []string, name string) bool {
-	for _, o := range opts {
-		if o == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(opts, name)
 }
 
 func derivePolicy(mounts []mount) landlockPolicy {

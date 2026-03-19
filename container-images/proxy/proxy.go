@@ -133,7 +133,13 @@ func main() {
 		}
 	}()
 
-	fmt.Fprintf(os.Stderr, "clampdown: %s proxy: listening %s -> %s\n", time.Now().UTC().Format(time.RFC3339), addr, upstream)
+	fmt.Fprintf(
+		os.Stderr,
+		"clampdown: %s proxy: listening %s -> %s\n",
+		time.Now().UTC().Format(time.RFC3339),
+		addr,
+		upstream,
+	)
 	fmt.Fprintf(os.Stderr, "clampdown: %s proxy: ready\n", time.Now().UTC().Format(time.RFC3339))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -150,12 +156,8 @@ func main() {
 // the path doesn't match.
 func modelFromPath(path string) string {
 	const prefix = "/models/"
-	i := strings.Index(path, prefix)
-	if i < 0 {
-		return "-"
-	}
-	rest := path[i+len(prefix):]
-	if rest == "" {
+	_, rest, found := strings.Cut(path, prefix)
+	if !found || rest == "" {
 		return "-"
 	}
 	colon := strings.IndexByte(rest, ':')

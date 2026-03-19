@@ -40,6 +40,10 @@ OPENCODE_SRCS     := container-images/opencode/Containerfile $(HELPERS_SRC) $(NE
 
 all: .sidecar.stamp .claude.stamp .opencode.stamp .proxy.stamp launcher
 
+lint:
+	@gopls check -severity=hint $$(find * -iname "*.go")
+	@golangci-lint run ./...
+
 test:
 	go test -v ./pkg/...
 	cd container-images/sidecar/entrypoint && go test -v .

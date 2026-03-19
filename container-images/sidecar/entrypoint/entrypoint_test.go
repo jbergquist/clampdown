@@ -53,7 +53,12 @@ func TestBuildNotifFilter(t *testing.T) {
 		t.Errorf("instruction %d: expected ALLOW %#x, got %#x", allowIdx, unix.SECCOMP_RET_ALLOW, filter[allowIdx].K)
 	}
 	if filter[notifIdx].K != unix.SECCOMP_RET_USER_NOTIF {
-		t.Errorf("instruction %d: expected USER_NOTIF %#x, got %#x", notifIdx, unix.SECCOMP_RET_USER_NOTIF, filter[notifIdx].K)
+		t.Errorf(
+			"instruction %d: expected USER_NOTIF %#x, got %#x",
+			notifIdx,
+			unix.SECCOMP_RET_USER_NOTIF,
+			filter[notifIdx].K,
+		)
 	}
 
 	// Verify all jumps target USER_NOTIF.

@@ -252,15 +252,15 @@ type testAgent struct {
 	overlays []agent.Mount
 }
 
-func (a *testAgent) Name() string                       { return "test" }
-func (a *testAgent) Image() string                      { return "test:latest" }
-func (a *testAgent) EgressDomains() []string            { return nil }
-func (a *testAgent) Mounts() []agent.Mount              { return a.mounts }
-func (a *testAgent) ConfigOverlays() []agent.Mount      { return a.overlays }
-func (a *testAgent) Env() map[string]string             { return nil }
-func (a *testAgent) Args(passthrough []string) []string { return passthrough }
-func (a *testAgent) PromptFile() string                 { return "" }
-func (a *testAgent) ProxyRoutes() []agent.ProxyRoute                        { return nil }
+func (a *testAgent) Name() string                                            { return "test" }
+func (a *testAgent) Image() string                                           { return "test:latest" }
+func (a *testAgent) EgressDomains() []string                                 { return nil }
+func (a *testAgent) Mounts() []agent.Mount                                   { return a.mounts }
+func (a *testAgent) ConfigOverlays() []agent.Mount                           { return a.overlays }
+func (a *testAgent) Env() map[string]string                                  { return nil }
+func (a *testAgent) Args(passthrough []string) []string                      { return passthrough }
+func (a *testAgent) PromptFile() string                                      { return "" }
+func (a *testAgent) ProxyRoutes() []agent.ProxyRoute                         { return nil }
 func (a *testAgent) ProxyEnvOverride(_ []agent.ProxyRoute) map[string]string { return nil }
 
 func TestBuild_ProtectionMounts(t *testing.T) {

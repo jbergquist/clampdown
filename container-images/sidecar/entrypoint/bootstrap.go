@@ -137,7 +137,19 @@ func bootstrapFirewall() error {
 		if err != nil {
 			return fmt.Errorf("%s flush FORWARD: %w", bin, err)
 		}
-		err = iptRun(bin, "-t", "mangle", "-A", "FORWARD", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT")
+		err = iptRun(
+			bin,
+			"-t",
+			"mangle",
+			"-A",
+			"FORWARD",
+			"-m",
+			"state",
+			"--state",
+			"ESTABLISHED,RELATED",
+			"-j",
+			"ACCEPT",
+		)
 		if err != nil {
 			return fmt.Errorf("%s FORWARD established: %w", bin, err)
 		}

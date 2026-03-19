@@ -29,19 +29,19 @@ const (
 
 // Package-level state set by TestMain.
 var (
-	rt               container.Runtime
-	sidecarName      string
-	digestSidecar    string
-	integSidecar     string
-	workdir          string
-	workdirDigest    string
-	workdirInteg     string
-	integGitconfig   string   // host-side gitconfig dir (contains gitconfig file)
-	integGHDir       string   // host-side gh config dir
-	integSocketPath  string   // host-side Unix socket for forwarding test
-	integSocketLn    net.Listener
-	innerPodman      = "/usr/local/bin/podman"
-	innerEnv         = map[string]string{"CONTAINER_HOST": container.SidecarAPI}
+	rt              container.Runtime
+	sidecarName     string
+	digestSidecar   string
+	integSidecar    string
+	workdir         string
+	workdirDigest   string
+	workdirInteg    string
+	integGitconfig  string // host-side gitconfig dir (contains gitconfig file)
+	integGHDir      string // host-side gh config dir
+	integSocketPath string // host-side Unix socket for forwarding test
+	integSocketLn   net.Listener
+	innerPodman     = "/usr/local/bin/podman"
+	innerEnv        = map[string]string{"CONTAINER_HOST": container.SidecarAPI}
 )
 
 // sidecarExec runs a command inside the given sidecar container.
@@ -281,7 +281,11 @@ func runTests(m *testing.M) (code int) {
 		fmt.Fprintf(os.Stderr, "create gh dir: %v\n", err)
 		return 1
 	}
-	err = os.WriteFile(filepath.Join(integGHDir, "hosts.yml"), []byte("github.com:\n  oauth_token: fake-test-token\n"), 0o644)
+	err = os.WriteFile(
+		filepath.Join(integGHDir, "hosts.yml"),
+		[]byte("github.com:\n  oauth_token: fake-test-token\n"),
+		0o644,
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "write hosts.yml: %v\n", err)
 		return 1

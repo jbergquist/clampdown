@@ -34,7 +34,7 @@ func dumpAuditLogs(ctx context.Context, rt container.Runtime, f *os.File, sideca
 				// Strip the runtime --timestamps prefix, keep
 				// only the clampdown: line with its own timestamp.
 				clean := StripRuntimeTimestamp(line)
-				f.WriteString(clean + "\n")
+				_, _ = f.WriteString(clean + "\n")
 			}
 		}
 	}

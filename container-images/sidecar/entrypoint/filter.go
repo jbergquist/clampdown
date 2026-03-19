@@ -141,13 +141,21 @@ func installFilter(filter []unix.SockFilter) int {
 		flags uintptr
 		name  string
 	}{
-		{unix.SECCOMP_FILTER_FLAG_NEW_LISTENER | unix.SECCOMP_FILTER_FLAG_TSYNC | unix.SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV, "TSYNC|NEW_LISTENER|WAIT_KILLABLE"},
+		{
+			unix.SECCOMP_FILTER_FLAG_NEW_LISTENER | unix.SECCOMP_FILTER_FLAG_TSYNC | unix.SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV,
+			"TSYNC|NEW_LISTENER|WAIT_KILLABLE",
+		},
 		{unix.SECCOMP_FILTER_FLAG_NEW_LISTENER | unix.SECCOMP_FILTER_FLAG_TSYNC, "TSYNC|NEW_LISTENER"},
 		{unix.SECCOMP_FILTER_FLAG_NEW_LISTENER, "NEW_LISTENER"},
 	}
 
 	for _, fs := range flagSets {
-		fd, _, errno := unix.RawSyscall(unix.SYS_SECCOMP, unix.SECCOMP_SET_MODE_FILTER, fs.flags, uintptr(unsafe.Pointer(&prog)))
+		fd, _, errno := unix.RawSyscall(
+			unix.SYS_SECCOMP,
+			unix.SECCOMP_SET_MODE_FILTER,
+			fs.flags,
+			uintptr(unsafe.Pointer(&prog)),
+		)
 		if errno == 0 {
 			fmt.Fprintf(os.Stderr, "seccomp-notif: installed (%s)\n", fs.name)
 			runtime.KeepAlive(filter)

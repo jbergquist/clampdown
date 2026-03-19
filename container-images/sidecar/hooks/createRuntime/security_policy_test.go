@@ -308,11 +308,11 @@ func TestCheckMaskedPaths_CoveredByROMount(t *testing.T) {
 
 	// Directory paths need an empty dir as source; file paths need /dev/null.
 	dirPaths := map[string]bool{
-		"/sys/kernel/debug":      true,
-		"/sys/kernel/tracing":    true,
-		"/sys/kernel/security":   true,
-		"/sys/fs/bpf":            true,
-		"/sys/module":            true,
+		"/sys/kernel/debug":        true,
+		"/sys/kernel/tracing":      true,
+		"/sys/kernel/security":     true,
+		"/sys/fs/bpf":              true,
+		"/sys/module":              true,
 		"/sys/devices/virtual/dmi": true,
 	}
 	emptyDir := t.TempDir()

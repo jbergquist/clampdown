@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/89luca89/clampdown/pkg/container"
@@ -87,7 +88,13 @@ func InitState(path string) error {
 // allow mode: loopback -> established -> AGENT_ALLOW -> private CIDRs REJECT ->
 //
 //	AGENT_BLOCK -> terminal ACCEPT
-func BuildAgentFirewall(ctx context.Context, rt container.Runtime, sidecar string, policy string, allowIPs []string) error {
+func BuildAgentFirewall(
+	ctx context.Context,
+	rt container.Runtime,
+	sidecar string,
+	policy string,
+	allowIPs []string,
+) error {
 	ip4s, ip6s := ClassifyIPs(allowIPs)
 
 	for _, bin := range []string{binIPT4, binIPT6} {
@@ -214,13 +221,25 @@ func BuildPodFirewall(ctx context.Context, rt container.Runtime, sidecar string,
 
 // AgentAllow sets a host to ACCEPT in the agent firewall.
 // Port defaults to 443 if empty.
-func AgentAllow(ctx context.Context, rt container.Runtime, sidecar, statePath string, targets []string, port int) error {
+func AgentAllow(
+	ctx context.Context,
+	rt container.Runtime,
+	sidecar, statePath string,
+	targets []string,
+	port int,
+) error {
 	return modifyState(ctx, rt, sidecar, statePath, "agent", "ACCEPT", targets, port)
 }
 
 // AgentBlock sets a host to REJECT in the agent firewall.
 // Port 0 means all ports.
-func AgentBlock(ctx context.Context, rt container.Runtime, sidecar, statePath string, targets []string, port int) error {
+func AgentBlock(
+	ctx context.Context,
+	rt container.Runtime,
+	sidecar, statePath string,
+	targets []string,
+	port int,
+) error {
 	return modifyState(ctx, rt, sidecar, statePath, "agent", "REJECT", targets, port)
 }
 
@@ -387,7 +406,7 @@ func portStr(port int) string {
 	if port == 0 {
 		return "*"
 	}
-	return fmt.Sprintf("%d", port)
+	return strconv.Itoa(port)
 }
 
 // reconcile flushes the dynamic chains for a scope and rebuilds them

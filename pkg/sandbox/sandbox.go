@@ -60,6 +60,8 @@ type Options struct {
 var errTamper = errors.New("session killed: read-only path tampered")
 
 // Run starts the sidecar and agent, blocking until the agent exits.
+//
+//nolint:gocognit,gocyclo,cyclop // Run orchestrates the full sandbox lifecycle: sidecar, proxy, agent, firewall, tripwire.
 func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options) error {
 	// We need landlock, fail if not present.
 	err := checkLandlock()
@@ -137,7 +139,8 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 	sidecarMasks, maskCreated := SidecarMaskedPaths(opts.Workdir, masked)
 
 	mnts, mountCreated, err := mounts.Build(opts.Workdir, p.Home, Home, ag, protection, masked)
-	created := append(maskCreated, mountCreated...)
+	created := maskCreated
+	created = append(created, mountCreated...)
 	if err != nil {
 		for _, c := range created {
 			_ = os.RemoveAll(c)
@@ -359,15 +362,14 @@ func cleanup(once *sync.Once, rt container.Runtime, agentName, proxyName, sideca
 	})
 }
 
+var proxyReadyRe = regexp.MustCompile("proxy:.*ready")
+
 // waitProxyReady polls the proxy container logs for the "proxy: ready" line.
 func waitProxyReady(ctx context.Context, rt container.Runtime, proxyName string) error {
 	for range readinessTimeout {
 		logs, err := rt.Logs(ctx, proxyName)
-		if err == nil {
-			match, err := regexp.MatchString("proxy:.*ready", string(logs))
-			if err == nil && match {
-				return nil
-			}
+		if err == nil && proxyReadyRe.Match(logs) {
+			return nil
 		}
 		time.Sleep(time.Second)
 	}

@@ -44,7 +44,7 @@ func readStringFromPID(pid uint32, addr uint64) (string, error) {
 		return "", fmt.Errorf("read %s at 0x%x: %w", path, addr, err)
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if buf[i] == 0 {
 			return string(buf[:i]), nil
 		}
@@ -198,7 +198,14 @@ func handleUmount2(notif *seccompNotif, resp *seccompNotifResp, pid uint32, prot
 //   - Procfs mount from sidecar PID namespace -> BLOCK
 //     (prevents mounting new procfs to access /proc/1/mem)
 //   - Otherwise -> ALLOW
-func handleMount(notif *seccompNotif, resp *seccompNotifResp, pid uint32, protected map[string]bool, workdir, myPIDNS string, notifFD int) {
+func handleMount(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	pid uint32,
+	protected map[string]bool,
+	workdir, myPIDNS string,
+	notifFD int,
+) {
 	target, err := readStringFromPID(pid, notif.Data.Args[1])
 	if err != nil {
 		logf("WARNING: mount cannot read target pid=%d: %v (allowing)", pid, err)
@@ -243,7 +250,13 @@ func handleMount(notif *seccompNotif, resp *seccompNotifResp, pid uint32, protec
 	if workdir != "" && flags&unix.MS_BIND != 0 && flags&unix.MS_REC == 0 && source != "" {
 		if source == workdir || isSubPath(source, workdir) {
 			resp.Error = -int32(unix.EPERM)
-			logf("BLOCKED mount(MS_BIND) source=%s target=%s pid=%d bin=%s (workdir ancestor bind)", source, target, pid, exePath(pid))
+			logf(
+				"BLOCKED mount(MS_BIND) source=%s target=%s pid=%d bin=%s (workdir ancestor bind)",
+				source,
+				target,
+				pid,
+				exePath(pid),
+			)
 			return
 		}
 	}
@@ -263,7 +276,13 @@ func handleMount(notif *seccompNotif, resp *seccompNotifResp, pid uint32, protec
 
 // handleMountSetattr blocks mount_setattr on protected paths.
 // mount_setattr(dirfd, path, flags, attr, size): arg1 = path pointer.
-func handleMountSetattr(notif *seccompNotif, resp *seccompNotifResp, pid uint32, protected map[string]bool, notifFD int) {
+func handleMountSetattr(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	pid uint32,
+	protected map[string]bool,
+	notifFD int,
+) {
 	path, err := readStringFromPID(pid, notif.Data.Args[1])
 	if err != nil {
 		logf("WARNING: mount_setattr cannot read path pid=%d: %v (allowing)", pid, err)
@@ -375,7 +394,14 @@ func handleFsopen(notif *seccompNotif, resp *seccompNotifResp, pid uint32, myPID
 //	ptrace(op, pid, ...):     arg1 = target pid
 //	process_vm_readv(pid, ...):  arg0 = target pid
 //	process_vm_writev(pid, ...): arg0 = target pid
-func handlePIDCheck(notif *seccompNotif, resp *seccompNotifResp, callerPID uint32, myPID uint64, nr int32, notifFD int) {
+func handlePIDCheck(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	callerPID uint32,
+	myPID uint64,
+	nr int32,
+	notifFD int,
+) {
 	targetPID := notif.Data.Args[0]
 	if nr == int32(unix.SYS_PTRACE) {
 		targetPID = notif.Data.Args[1]

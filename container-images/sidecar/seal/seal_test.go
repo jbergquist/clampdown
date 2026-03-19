@@ -65,4 +65,3 @@ func TestSplitPaths_Missing(t *testing.T) {
 		t.Errorf("files = %v, want empty", files)
 	}
 }
-

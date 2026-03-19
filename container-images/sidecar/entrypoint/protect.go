@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -81,13 +82,7 @@ func parseMountInfo(path, workdir string) map[string]bool {
 		}
 
 		opts := fields[5]
-		isRO := false
-		for _, opt := range strings.Split(opts, ",") {
-			if opt == "ro" {
-				isRO = true
-				break
-			}
-		}
+		isRO := slices.Contains(strings.Split(opts, ","), "ro")
 
 		// Find mount source -- it's after the " - " separator.
 		isDevNull := false
