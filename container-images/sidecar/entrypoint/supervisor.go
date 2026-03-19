@@ -52,6 +52,13 @@ func readStringFromPID(pid uint32, addr uint64) (string, error) {
 	return string(buf[:n]), nil
 }
 
+// exePath returns the executable path for a process, or "" on error.
+func exePath(pid uint32) string {
+	result := ""
+	result, _ = os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	return result
+}
+
 // resolvePath cleans a path and resolves relative paths using the
 // process's cwd.
 func resolvePath(raw string, pid uint32) string {
@@ -173,7 +180,7 @@ func handleUmount2(notif *seccompNotif, resp *seccompNotifResp, pid uint32, prot
 
 	if isProtected(target, protected) {
 		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED umount2 path=%s pid=%d", target, pid)
+		logf("BLOCKED umount2 path=%s pid=%d bin=%s", target, pid, exePath(pid))
 	} else {
 		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
 	}
@@ -226,7 +233,7 @@ func handleMount(notif *seccompNotif, resp *seccompNotifResp, pid uint32, protec
 	// Block any mount targeting a protected path (overlay, remount, tmpfs, bind over it).
 	if isProtected(target, protected) {
 		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED mount target=%s pid=%d flags=0x%x", target, pid, flags)
+		logf("BLOCKED mount target=%s pid=%d flags=0x%x bin=%s", target, pid, flags, exePath(pid))
 		return
 	}
 
@@ -236,7 +243,7 @@ func handleMount(notif *seccompNotif, resp *seccompNotifResp, pid uint32, protec
 	if workdir != "" && flags&unix.MS_BIND != 0 && flags&unix.MS_REC == 0 && source != "" {
 		if source == workdir || isSubPath(source, workdir) {
 			resp.Error = -int32(unix.EPERM)
-			logf("BLOCKED mount(MS_BIND) source=%s target=%s pid=%d (workdir ancestor bind)", source, target, pid)
+			logf("BLOCKED mount(MS_BIND) source=%s target=%s pid=%d bin=%s (workdir ancestor bind)", source, target, pid, exePath(pid))
 			return
 		}
 	}
@@ -247,7 +254,7 @@ func handleMount(notif *seccompNotif, resp *seccompNotifResp, pid uint32, protec
 	// procfs only shows their own PID namespace, not the sidecar's PID 1.
 	if fstype == "proc" && isSidecarPIDNS(pid, myPIDNS) {
 		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED mount(proc) target=%s pid=%d (sidecar PID namespace)", target, pid)
+		logf("BLOCKED mount(proc) target=%s pid=%d bin=%s (sidecar PID namespace)", target, pid, exePath(pid))
 		return
 	}
 
@@ -271,7 +278,7 @@ func handleMountSetattr(notif *seccompNotif, resp *seccompNotifResp, pid uint32,
 
 	if isProtected(path, protected) {
 		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED mount_setattr path=%s pid=%d", path, pid)
+		logf("BLOCKED mount_setattr path=%s pid=%d bin=%s", path, pid, exePath(pid))
 	} else {
 		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
 	}
@@ -296,7 +303,7 @@ func handleMoveMount(notif *seccompNotif, resp *seccompNotifResp, pid uint32, pr
 
 	if isProtected(toPath, protected) {
 		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED move_mount to_path=%s pid=%d", toPath, pid)
+		logf("BLOCKED move_mount to_path=%s pid=%d bin=%s", toPath, pid, exePath(pid))
 	} else {
 		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
 	}
@@ -330,7 +337,7 @@ func handleOpenTree(notif *seccompNotif, resp *seccompNotifResp, pid uint32, wor
 	// Block if path is the workdir or an ancestor of it.
 	if workdir != "" && (path == workdir || isSubPath(path, workdir)) {
 		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED open_tree(CLONE) path=%s pid=%d (workdir ancestor clone)", path, pid)
+		logf("BLOCKED open_tree(CLONE) path=%s pid=%d bin=%s (workdir ancestor clone)", path, pid, exePath(pid))
 		return
 	}
 
@@ -355,7 +362,7 @@ func handleFsopen(notif *seccompNotif, resp *seccompNotifResp, pid uint32, myPID
 
 	if fsname == "proc" && isSidecarPIDNS(pid, myPIDNS) {
 		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED fsopen(proc) pid=%d (sidecar PID namespace)", pid)
+		logf("BLOCKED fsopen(proc) pid=%d bin=%s (sidecar PID namespace)", pid, exePath(pid))
 		return
 	}
 
@@ -386,7 +393,7 @@ func handlePIDCheck(notif *seccompNotif, resp *seccompNotifResp, callerPID uint3
 		} else if nr == int32(unix.SYS_PROCESS_VM_WRITEV) {
 			name = "process_vm_writev"
 		}
-		logf("BLOCKED %s targeting PID 1 from pid=%d", name, callerPID)
+		logf("BLOCKED %s targeting PID 1 from pid=%d bin=%s", name, callerPID, exePath(callerPID))
 	} else {
 		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
 	}
