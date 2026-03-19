@@ -124,7 +124,7 @@ jobs:
           pattern: images-*
           merge-multiple: true
           path: ./release
-      - name: Create GitHub Release
+      - name: Publish GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -132,10 +132,12 @@ jobs:
         run: |
           PRERELEASE=""
           [[ "$TAG" == *"-"* ]] && PRERELEASE="--prerelease"
-          gh release create $TAG \
-            --title "clampdown $TAG" \
-            --generate-notes \
-            $PRERELEASE \
+          gh release view "$TAG" 2>/dev/null || \
+            gh release create "$TAG" \
+              --title "clampdown $TAG" \
+              --generate-notes \
+              $PRERELEASE
+          gh release upload "$TAG" --clobber \
             ./release/clampdown-linux-amd64 \
             ./release/clampdown-linux-arm64 \
             ./release/clampdown-sidecar-amd64.tar.gz \
