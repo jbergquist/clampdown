@@ -2,6 +2,6 @@
 
 module entrypoint
 
-go 1.24.0
+go 1.25.0
 
-require golang.org/x/sys v0.40.0
+require golang.org/x/sys v0.42.0
