@@ -38,6 +38,7 @@ const (
 type Options struct {
 	AgentAllow     string
 	AgentArgs      []string
+	AgentImage     string
 	AgentPolicy    string
 	AllowHooks     bool
 	CPUs           string
@@ -47,9 +48,11 @@ type Options struct {
 	GitConfig      bool
 	Memory         string
 	PodPolicy      string
+	ProxyImage     string
 	ProtectPaths   []string
 	RegistryAuth   bool
 	RequireDigest  string
+	SidecarImage   string
 	SSH            bool
 	UnmaskPaths    []string
 	Workdir        string

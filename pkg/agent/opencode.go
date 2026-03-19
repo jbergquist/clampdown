@@ -12,7 +12,7 @@ import (
 type OpenCode struct{}
 
 func (o *OpenCode) Name() string  { return "opencode" }
-func (o *OpenCode) Image() string { return "clampdown-opencode:latest" }
+func (o *OpenCode) Image() string { return "ghcr.io/89luca89/clampdown-opencode:latest" }
 
 func (o *OpenCode) EgressDomains() []string {
 	return []string{

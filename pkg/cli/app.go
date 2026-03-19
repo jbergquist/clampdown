@@ -67,6 +67,21 @@ func Run(args []string) error {
 				Sources: ucli.EnvVars("CONTAINER_RUNTIME"),
 				Usage:   "Container runtime (podman, docker, nerdctl)",
 			},
+			&ucli.StringFlag{
+				Name:  "sidecar-image",
+				Value: cfg.SidecarImage,
+				Usage: "Override sidecar container image",
+			},
+			&ucli.StringFlag{
+				Name:  "proxy-image",
+				Value: cfg.ProxyImage,
+				Usage: "Override auth proxy container image",
+			},
+			&ucli.StringFlag{
+				Name:  "agent-image",
+				Value: cfg.AgentImage,
+				Usage: "Override agent container image",
+			},
 			&ucli.BoolFlag{
 				Name:  "allow-hooks",
 				Value: cfg.AllowHooks,
@@ -320,6 +335,7 @@ func runAgent(agName string, cfg Config) ucli.ActionFunc {
 		opts := sandbox.Options{
 			AgentAllow:     cmd.String("agent-allow"),
 			AgentArgs:      cmd.Args().Slice(),
+			AgentImage:     cmd.String("agent-image"),
 			AgentPolicy:    cmd.String("agent-policy"),
 			AllowHooks:     cmd.Bool("allow-hooks"),
 			CPUs:           cmd.String("cpus"),
@@ -329,9 +345,11 @@ func runAgent(agName string, cfg Config) ucli.ActionFunc {
 			MaskPaths:      append(cfg.MaskPaths, cmd.StringSlice("mask")...),
 			Memory:         cmd.String("memory"),
 			PodPolicy:      cmd.String("pod-policy"),
+			ProxyImage:     cmd.String("proxy-image"),
 			ProtectPaths:   append(cfg.ProtectPaths, cmd.StringSlice("protect")...),
 			RegistryAuth:   cmd.Bool("registry-auth"),
 			RequireDigest:  cmd.String("require-digest"),
+			SidecarImage:   cmd.String("sidecar-image"),
 			SSH:            cmd.Bool("ssh"),
 			UnmaskPaths:    append(cfg.UnmaskPaths, cmd.StringSlice("unmask")...),
 			Workdir:        workdir,

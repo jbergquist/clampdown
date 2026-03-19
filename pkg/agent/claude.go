@@ -8,7 +8,7 @@ import "path/filepath"
 type Claude struct{}
 
 func (c *Claude) Name() string  { return "claude" }
-func (c *Claude) Image() string { return "clampdown-claude:latest" }
+func (c *Claude) Image() string { return "ghcr.io/89luca89/clampdown-claude:latest" }
 
 func (c *Claude) EgressDomains() []string {
 	return []string{

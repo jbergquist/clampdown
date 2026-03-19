@@ -18,10 +18,18 @@ import (
 )
 
 // Infrastructure container images. Agent images are per-agent (Agent.Image()).
+// These are the defaults; all three can be overridden via Options.
 const (
-	SidecarImage = "clampdown-sidecar:latest"
-	ProxyImage   = "clampdown-proxy:latest"
+	SidecarImage = "ghcr.io/89luca89/clampdown-sidecar:latest"
+	ProxyImage   = "ghcr.io/89luca89/clampdown-proxy:latest"
 )
+
+func orDefault(override, def string) string {
+	if override != "" {
+		return override
+	}
+	return def
+}
 
 // LandlockPolicy matches the JSON expected by sandbox-seal.
 type LandlockPolicy struct {
@@ -57,7 +65,7 @@ func sidecarConfig(
 		AuthFile:       authFile,
 		Labels:         labels(session, "sidecar", ag, opts),
 		Name:           name,
-		Image:          SidecarImage,
+		Image:          orDefault(opts.SidecarImage, SidecarImage),
 		Workdir:        opts.Workdir,
 		StorageDir:     p.Storage,
 		CacheDir:       p.Cache,
@@ -125,7 +133,7 @@ func agentConfig(
 
 	return container.AgentContainerConfig{
 		Name:           name,
-		Image:          ag.Image(),
+		Image:          orDefault(opts.AgentImage, ag.Image()),
 		Labels:         labels(session, "agent", ag, opts),
 		SidecarName:    sidecarName,
 		Workdir:        opts.Workdir,
@@ -424,7 +432,7 @@ func ProxyConfig(
 
 	return container.ProxyContainerConfig{
 		Name:           name,
-		Image:          ProxyImage,
+		Image:          orDefault(opts.ProxyImage, ProxyImage),
 		Labels:         labels(session, "proxy", ag, opts),
 		SidecarName:    sidecarName,
 		Env:            env,
