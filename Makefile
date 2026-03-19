@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
-CTR    ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null || command -v nerdctl 2>/dev/null)
-GOARCH ?= $(shell go env GOARCH)
+CTR      ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null || command -v nerdctl 2>/dev/null)
+GOARCH   ?= $(shell go env GOARCH)
+REGISTRY ?=
+TAG      ?= latest
+PLATFORM ?= linux/$(GOARCH)
 
 SIDECAR_IMAGE  := clampdown-sidecar:latest
 CLAUDE_IMAGE   := clampdown-claude:latest
@@ -37,7 +40,10 @@ NETWORK_HELPER    := container-images/helpers/sandbox_network_helper.c
 CLAUDE_SRCS       := container-images/claude/Containerfile $(HELPERS_SRC) $(NETWORK_HELPER)
 OPENCODE_SRCS     := container-images/opencode/Containerfile $(HELPERS_SRC) $(NETWORK_HELPER)
 
-.PHONY: all test test-integration seal sidecar claude opencode proxy launcher install clean
+.PHONY: all binaries test test-integration lint \
+	seal sidecar claude opencode proxy launcher install clean \
+	push-sidecar push-claude push-opencode push-proxy push-images \
+	manifest save-images
 
 all: .sidecar.stamp .claude.stamp .opencode.stamp .proxy.stamp launcher
 
@@ -64,22 +70,25 @@ test-integration: .sidecar.stamp
 # --- Go binaries (host builds, CGO_ENABLED=0) ---
 
 container-images/sidecar/seal/sandbox-seal: $(SEAL_SRCS)
-	cd container-images/sidecar/seal && CGO_ENABLED=0 go build -ldflags='-s -w' -o sandbox-seal .
+	cd container-images/sidecar/seal && CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o sandbox-seal .
 
 container-images/sidecar/entrypoint/entrypoint: $(ENTRYPOINT_SRCS)
-	cd container-images/sidecar/entrypoint && CGO_ENABLED=0 go build -ldflags='-s -w' -o entrypoint .
+	cd container-images/sidecar/entrypoint && CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o entrypoint .
 
 container-images/sidecar/log/log: $(LOG_SRCS)
-	cd container-images/sidecar/log && CGO_ENABLED=0 go build -ldflags='-s -w' -o log .
+	cd container-images/sidecar/log && CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o log .
 
 container-images/sidecar/hooks/createRuntime/security-policy: $(SECPOL_SRCS)
-	cd container-images/sidecar/hooks/createRuntime && CGO_ENABLED=0 go build -ldflags='-s -w' -o security-policy .
+	cd container-images/sidecar/hooks/createRuntime && CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o security-policy .
 
 container-images/sidecar/hooks/precreate/seal-inject: $(SEALINJ_SRCS)
-	cd container-images/sidecar/hooks/precreate && CGO_ENABLED=0 go build -ldflags='-s -w' -o seal-inject .
+	cd container-images/sidecar/hooks/precreate && CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o seal-inject .
 
 container-images/proxy/auth-proxy: $(PROXY_SRCS)
-	cd container-images/proxy && CGO_ENABLED=0 go build -ldflags='-s -w' -o auth-proxy .
+	cd container-images/proxy && CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o auth-proxy .
+
+# Build all Go binaries for the current GOARCH (used by CI release).
+binaries: $(SIDECAR_BINS) container-images/proxy/auth-proxy launcher
 
 # --- Container images (stamp-based, skip when sources unchanged) ---
 
@@ -98,6 +107,66 @@ container-images/proxy/auth-proxy: $(PROXY_SRCS)
 .proxy.stamp: container-images/proxy/auth-proxy container-images/sidecar/seal/sandbox-seal container-images/proxy/Containerfile
 	$(CTR) build -f container-images/proxy/Containerfile -t $(PROXY_IMAGE) container-images/
 	@touch $@
+
+# --- Registry image builds (require REGISTRY and TAG) ---
+# Build and push a single-platform image tagged as $(REGISTRY)/...:$(TAG)-$(GOARCH).
+
+push-sidecar: $(SIDECAR_BINS) $(SIDECAR_SRCS)
+	$(CTR) build \
+		--platform $(PLATFORM) \
+		-t $(REGISTRY)/clampdown-sidecar:$(TAG)-$(GOARCH) \
+		-f container-images/sidecar/Containerfile \
+		container-images/sidecar/
+	$(CTR) push $(REGISTRY)/clampdown-sidecar:$(TAG)-$(GOARCH)
+
+push-claude: container-images/sidecar/seal/sandbox-seal $(CLAUDE_SRCS)
+	$(CTR) build \
+		--platform $(PLATFORM) \
+		-t $(REGISTRY)/clampdown-claude:$(TAG)-$(GOARCH) \
+		-f container-images/claude/Containerfile \
+		container-images/
+	$(CTR) push $(REGISTRY)/clampdown-claude:$(TAG)-$(GOARCH)
+
+push-opencode: container-images/sidecar/seal/sandbox-seal $(OPENCODE_SRCS)
+	$(CTR) build \
+		--platform $(PLATFORM) \
+		-t $(REGISTRY)/clampdown-opencode:$(TAG)-$(GOARCH) \
+		-f container-images/opencode/Containerfile \
+		container-images/
+	$(CTR) push $(REGISTRY)/clampdown-opencode:$(TAG)-$(GOARCH)
+
+push-proxy: container-images/proxy/auth-proxy container-images/sidecar/seal/sandbox-seal container-images/proxy/Containerfile
+	$(CTR) build \
+		--platform $(PLATFORM) \
+		-t $(REGISTRY)/clampdown-proxy:$(TAG)-$(GOARCH) \
+		-f container-images/proxy/Containerfile \
+		container-images/
+	$(CTR) push $(REGISTRY)/clampdown-proxy:$(TAG)-$(GOARCH)
+
+push-images: push-sidecar push-claude push-opencode push-proxy
+
+# Merge per-arch images into a multi-arch manifest at :$(TAG) and :latest.
+# Requires docker 20.10+ or podman 4+.
+manifest:
+	@for img in sidecar claude opencode proxy; do \
+		$(CTR) manifest create \
+			$(REGISTRY)/clampdown-$$img:$(TAG) \
+			$(REGISTRY)/clampdown-$$img:$(TAG)-amd64 \
+			$(REGISTRY)/clampdown-$$img:$(TAG)-arm64; \
+		$(CTR) manifest push $(REGISTRY)/clampdown-$$img:$(TAG); \
+		$(CTR) manifest create \
+			$(REGISTRY)/clampdown-$$img:latest \
+			$(REGISTRY)/clampdown-$$img:$(TAG)-amd64 \
+			$(REGISTRY)/clampdown-$$img:$(TAG)-arm64; \
+		$(CTR) manifest push $(REGISTRY)/clampdown-$$img:latest; \
+	done
+
+# Pull the per-arch images and export each as a compressed tar archive.
+save-images:
+	@for img in sidecar claude opencode proxy; do \
+		$(CTR) pull --platform $(PLATFORM) $(REGISTRY)/clampdown-$$img:$(TAG)-$(GOARCH); \
+		$(CTR) save $(REGISTRY)/clampdown-$$img:$(TAG)-$(GOARCH) | gzip > clampdown-$$img-$(GOARCH).tar.gz; \
+	done
 
 # --- Aliases ---
 

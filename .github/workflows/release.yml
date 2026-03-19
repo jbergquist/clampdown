@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make test
+
+  build-go:
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+            runner: ubuntu-latest
+          - goarch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make GOARCH=${{ matrix.goarch }} binaries
+      - run: mv clampdown clampdown-linux-${{ matrix.goarch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-binaries-${{ matrix.goarch }}
+          path: |
+            clampdown-linux-${{ matrix.goarch }}
+            container-images/sidecar/seal/sandbox-seal
+            container-images/sidecar/entrypoint/entrypoint
+            container-images/sidecar/log/log
+            container-images/sidecar/hooks/createRuntime/security-policy
+            container-images/sidecar/hooks/precreate/seal-inject
+            container-images/proxy/auth-proxy
+
+  build-images:
+    needs: build-go
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+            runner: ubuntu-latest
+          - goarch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: go-binaries-${{ matrix.goarch }}
+          path: .
+      - name: Restore executable bits
+        run: |
+          chmod +x \
+            container-images/sidecar/seal/sandbox-seal \
+            container-images/sidecar/entrypoint/entrypoint \
+            container-images/sidecar/log/log \
+            container-images/sidecar/hooks/createRuntime/security-policy \
+            container-images/sidecar/hooks/precreate/seal-inject \
+            container-images/proxy/auth-proxy
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: |
+          make \
+            GOARCH=${{ matrix.goarch }} \
+            REGISTRY=ghcr.io/${{ github.repository_owner }} \
+            TAG=${{ github.ref_name }} \
+            push-images
+      - run: |
+          make \
+            GOARCH=${{ matrix.goarch }} \
+            REGISTRY=ghcr.io/${{ github.repository_owner }} \
+            TAG=${{ github.ref_name }} \
+            save-images
+      - uses: actions/upload-artifact@v4
+        with:
+          name: images-${{ matrix.goarch }}
+          path: "*.tar.gz"
+
+  manifest:
+    needs: build-images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: |
+          make \
+            REGISTRY=ghcr.io/${{ github.repository_owner }} \
+            TAG=${{ github.ref_name }} \
+            manifest
+
+  release:
+    needs: [build-images, manifest]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: go-binaries-*
+          merge-multiple: true
+          path: ./release
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: images-*
+          merge-multiple: true
+          path: ./release
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          PRERELEASE=""
+          [[ "$TAG" == *"-"* ]] && PRERELEASE="--prerelease"
+          gh release create $TAG \
+            --title "clampdown $TAG" \
+            --generate-notes \
+            $PRERELEASE \
+            ./release/clampdown-linux-amd64 \
+            ./release/clampdown-linux-arm64 \
+            ./release/clampdown-sidecar-amd64.tar.gz \
+            ./release/clampdown-sidecar-arm64.tar.gz \
+            ./release/clampdown-claude-amd64.tar.gz \
+            ./release/clampdown-claude-arm64.tar.gz \
+            ./release/clampdown-opencode-amd64.tar.gz \
+            ./release/clampdown-opencode-arm64.tar.gz \
+            ./release/clampdown-proxy-amd64.tar.gz \
+            ./release/clampdown-proxy-arm64.tar.gz
