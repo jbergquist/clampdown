@@ -2,7 +2,7 @@
 # Auth proxy — holds API keys, proxies requests to upstream APIs.
 # FROM scratch: no shell, no package manager, no libc.
 # CA certificates copied from Alpine for TLS to upstream APIs.
-FROM alpine:latest@sha256:59855d3dceb3ae53991193bd03301e082b2a7faa56a514b03527ae0ec2ce3a95 AS certs
+FROM alpine:3.23 AS certs
 RUN true
 
 FROM scratch

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # shim to avoid EXDEV on renames
-FROM alpine:latest@sha256:59855d3dceb3ae53991193bd03301e082b2a7faa56a514b03527ae0ec2ce3a95 AS shim
+FROM alpine:3.23 AS shim
 RUN apk add --no-cache gcc musl-dev
 COPY shims/rename_exdev_shim.c /build/
 # -nostdlib: no DT_NEEDED for musl libc — symbols resolve from the
@@ -17,7 +17,7 @@ RUN ALLOWED="__errno_location __stack_chk_fail __stack_chk_guard close fchmod fc
     && echo "Symbol audit passed"
 
 # podman-static release
-FROM alpine:latest@sha256:59855d3dceb3ae53991193bd03301e082b2a7faa56a514b03527ae0ec2ce3a95 AS podman
+FROM alpine:3.23 AS podman
 ARG TARGETARCH
 # Pinned version — update deliberately after verifying CVE patches.
 # v5.8.0 includes fixes for CVE-2024-1753 (build-time escape) and
@@ -28,7 +28,7 @@ RUN echo "podman-static ${PODMAN_VERSION} (${TARGETARCH})" \
     | tar xz --strip-components=1 -C /
 
 # extract iptables from alpine and
-FROM alpine:latest@sha256:59855d3dceb3ae53991193bd03301e082b2a7faa56a514b03527ae0ec2ce3a95 AS iptables
+FROM alpine:3.23 AS iptables
 RUN mkdir /iptables && apk add --initdb --root /iptables \
     --no-cache --no-scripts \
     --keys-dir /etc/apk/keys \
