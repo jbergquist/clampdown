@@ -1,0 +1,61 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /container-images/sidecar/seal
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /container-images/sidecar/entrypoint
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /container-images/sidecar/hooks/createRuntime
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /container-images/sidecar/hooks/precreate
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /container-images/sidecar/log
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /container-images/proxy
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /container-images/sidecar
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /container-images/claude
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /container-images/opencode
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /container-images/proxy
+    schedule:
+      interval: weekly
