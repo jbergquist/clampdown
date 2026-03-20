@@ -162,6 +162,22 @@ func Build(
 	return mounts, created, nil
 }
 
+// syncPath fsyncs a path and its parent directory, ensuring the entry is
+// visible through shared network mounts (like virtiofs or sshfs) before the
+// container runtime tries to create mount points on top.
+func syncPath(abs string) {
+	f, err := os.Open(abs)
+	if err == nil {
+		_ = f.Sync()
+		f.Close()
+	}
+	d, err := os.Open(filepath.Dir(abs))
+	if err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+}
+
 // ProtectMount returns a mount spec and optionally the path created on the
 // host (empty string if the path already existed). Returns nil if the parent
 // directory doesn't exist (nothing to protect, caller should skip).
@@ -184,6 +200,7 @@ func ProtectMount(abs string, isDir bool) (*container.MountSpec, string, error) 
 		if err != nil {
 			return nil, "", err
 		}
+		syncPath(abs)
 		return &container.MountSpec{Dest: abs, Type: container.EmptyRO}, abs, nil
 	}
 
@@ -191,6 +208,7 @@ func ProtectMount(abs string, isDir bool) (*container.MountSpec, string, error) 
 	if err != nil {
 		return nil, "", err
 	}
+	syncPath(abs)
 	return &container.MountSpec{Dest: abs, Type: container.DevNull}, abs, nil
 }
 
@@ -215,6 +233,7 @@ func MaskMount(abs string, isDir bool) (*container.MountSpec, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
+		syncPath(abs)
 		created = abs
 	}
 
