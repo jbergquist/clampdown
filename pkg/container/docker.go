@@ -27,10 +27,10 @@ type dockerDaemonInfo struct {
 
 // Docker implements Runtime for docker.
 type Docker struct {
-	probeOnce sync.Once
-	debug     bool
-	native    bool // daemon runs on the same kernel (not a VM)
-	selinux   bool // daemon has SELinux enabled
+	probeOnce  sync.Once
+	debug      bool
+	native     bool // daemon runs on the same kernel (not a VM)
+	selinux    bool // daemon has SELinux enabled
 	daemonInfo dockerDaemonInfo
 }
 

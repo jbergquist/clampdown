@@ -70,22 +70,22 @@ test-integration: .sidecar.stamp
 # --- Go binaries (host builds, CGO_ENABLED=0) ---
 
 container-images/sidecar/seal/sandbox-seal: $(SEAL_SRCS)
-	cd container-images/sidecar/seal && CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o sandbox-seal .
+	cd container-images/sidecar/seal && CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -ldflags='-s -w' -o sandbox-seal .
 
 container-images/sidecar/entrypoint/entrypoint: $(ENTRYPOINT_SRCS)
-	cd container-images/sidecar/entrypoint && CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o entrypoint .
+	cd container-images/sidecar/entrypoint && CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -ldflags='-s -w' -o entrypoint .
 
 container-images/sidecar/log/log: $(LOG_SRCS)
-	cd container-images/sidecar/log && CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o log .
+	cd container-images/sidecar/log && CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -ldflags='-s -w' -o log .
 
 container-images/sidecar/hooks/createRuntime/security-policy: $(SECPOL_SRCS)
-	cd container-images/sidecar/hooks/createRuntime && CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o security-policy .
+	cd container-images/sidecar/hooks/createRuntime && CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -ldflags='-s -w' -o security-policy .
 
 container-images/sidecar/hooks/precreate/seal-inject: $(SEALINJ_SRCS)
-	cd container-images/sidecar/hooks/precreate && CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o seal-inject .
+	cd container-images/sidecar/hooks/precreate && CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -ldflags='-s -w' -o seal-inject .
 
 container-images/proxy/auth-proxy: $(PROXY_SRCS)
-	cd container-images/proxy && CGO_ENABLED=0 GOARCH=$(GOARCH) go build -ldflags='-s -w' -o auth-proxy .
+	cd container-images/proxy && CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -ldflags='-s -w' -o auth-proxy .
 
 # Build all Go binaries for the current GOARCH (used by CI release).
 binaries: $(SIDECAR_BINS) container-images/proxy/auth-proxy launcher

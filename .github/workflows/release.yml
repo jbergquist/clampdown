@@ -47,6 +47,20 @@ jobs:
             container-images/sidecar/hooks/precreate/seal-inject
             container-images/proxy/auth-proxy
 
+  build-go-darwin:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: GOOS=darwin GOARCH=arm64 make launcher && mv clampdown clampdown-darwin-arm64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: go-binaries-darwin
+          path: clampdown-darwin-arm64
+
   build-images:
     needs: build-go
     strategy:
@@ -111,7 +125,7 @@ jobs:
             manifest
 
   release:
-    needs: [build-images, manifest]
+    needs: [build-images, manifest, build-go-darwin]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -140,6 +154,7 @@ jobs:
           gh release upload "$TAG" --clobber \
             ./release/clampdown-linux-amd64 \
             ./release/clampdown-linux-arm64 \
+            ./release/clampdown-darwin-arm64 \
             ./release/clampdown-sidecar-amd64.tar.gz \
             ./release/clampdown-sidecar-arm64.tar.gz \
             ./release/clampdown-claude-amd64.tar.gz \
