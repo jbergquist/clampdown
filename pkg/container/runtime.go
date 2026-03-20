@@ -23,6 +23,7 @@ type Runtime interface {
 	Prune(ctx context.Context, projectDir string) error
 	PushImage(ctx context.Context, sidecar string, images []string) error
 	Remove(ctx context.Context, names ...string) error
+	SetDebug(bool)
 	Stop(ctx context.Context, names ...string) error
 	StartAgent(ctx context.Context, cfg AgentContainerConfig) error
 	StartProxy(ctx context.Context, cfg ProxyContainerConfig) error

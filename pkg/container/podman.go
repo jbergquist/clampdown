@@ -15,10 +15,21 @@ import (
 )
 
 // Podman implements Runtime for podman.
-type Podman struct{}
+type Podman struct {
+	debug bool
+}
 
-func (p *Podman) Name() string { return namePodman }
-func (p *Podman) bin() string  { return namePodman }
+func (p *Podman) Name() string    { return namePodman }
+func (p *Podman) SetDebug(v bool) { p.debug = v }
+
+// command builds an exec.Cmd with the runtime binary and global flags
+// (e.g. --log-level=debug) prepended before the subcommand args.
+func (p *Podman) command(ctx context.Context, args ...string) *exec.Cmd {
+	if p.debug {
+		args = append([]string{"--log-level=debug"}, args...)
+	}
+	return exec.CommandContext(ctx, namePodman, args...)
+}
 
 func (p *Podman) StartSidecar(ctx context.Context, cfg SidecarContainerConfig) error {
 	args := []string{"run", "-d", "--name", cfg.Name,
@@ -104,7 +115,7 @@ func (p *Podman) StartSidecar(ctx context.Context, cfg SidecarContainerConfig) e
 	}
 	args = append(args, cfg.Image)
 
-	cmd := exec.CommandContext(ctx, p.bin(), args...)
+	cmd := p.command(ctx, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	slog.Debug("exec", "cmd", cmd.Args)
@@ -144,7 +155,7 @@ func (p *Podman) StartProxy(ctx context.Context, cfg ProxyContainerConfig) error
 
 	args = append(args, cfg.Image)
 
-	cmd := exec.CommandContext(ctx, p.bin(), args...)
+	cmd := p.command(ctx, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	slog.Debug("exec", "cmd", cmd.Args)
@@ -200,7 +211,7 @@ func (p *Podman) StartAgent(ctx context.Context, cfg AgentContainerConfig) error
 	args = append(args, "--workdir", cfg.Workdir, cfg.Image)
 	args = append(args, cfg.EntrypointArgs...)
 
-	cmd := exec.CommandContext(ctx, p.bin(), args...)
+	cmd := p.command(ctx, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -240,7 +251,7 @@ func (p *Podman) Exec(
 	args = append(args, ctr)
 	args = append(args, cmd...)
 
-	c := exec.CommandContext(ctx, p.bin(), args...)
+	c := p.command(ctx, args...)
 	slog.Debug("exec", "cmd", c.Args)
 	return c.CombinedOutput()
 }
@@ -249,7 +260,7 @@ func (p *Podman) ExecStdin(
 	ctx context.Context, ctr string, cmd []string, stdin []byte,
 ) ([]byte, error) {
 	args := append([]string{"exec", "-i", ctr}, cmd...)
-	c := exec.CommandContext(ctx, p.bin(), args...)
+	c := p.command(ctx, args...)
 	c.Stdin = bytes.NewReader(stdin)
 	slog.Debug("exec-stdin", "cmd", c.Args)
 	return c.CombinedOutput()
@@ -260,7 +271,7 @@ func (p *Podman) List(ctx context.Context, labels map[string]string) ([]Info, er
 	for k, v := range labels {
 		args = append(args, "--filter", "label="+k+"="+v)
 	}
-	cmd := exec.CommandContext(ctx, p.bin(), args...)
+	cmd := p.command(ctx, args...)
 	slog.Debug("exec", "cmd", cmd.Args)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -299,7 +310,7 @@ func (p *Podman) Prune(ctx context.Context, projectDir string) error {
 		"clampdown-" + p.Name() + "-" + hash + "-cache",
 		"clampdown-" + p.Name() + "-" + hash + "-tmp",
 	}
-	_ = exec.CommandContext(ctx, p.bin(), append([]string{"volume", "rm", "--force"}, vols...)...).Run()
+	_ = p.command(ctx, append([]string{"volume", "rm", "--force"}, vols...)...).Run()
 
 	// Remaining host dirs: <rt>-home, <rt>-state.
 	dirs, err := filepath.Glob(filepath.Join(projectDir, p.Name()+"-*"))
@@ -312,14 +323,14 @@ func (p *Podman) Prune(ctx context.Context, projectDir string) error {
 	// podman unshare enters the user namespace so rm can access
 	// files created by rootless podman with shifted UIDs.
 	args := append([]string{"unshare", "rm", "-rf"}, dirs...)
-	cmd := exec.CommandContext(ctx, p.bin(), args...)
+	cmd := p.command(ctx, args...)
 	cmd.Stderr = os.Stderr
 	slog.Debug("exec", "cmd", cmd.Args)
 	return cmd.Run()
 }
 
 func (p *Podman) CleanStale(ctx context.Context, prefix string) {
-	cmd := exec.CommandContext(ctx, p.bin(),
+	cmd := p.command(ctx,
 		"ps", "-a",
 		"--filter", "status=exited",
 		"--filter", "status=dead",
@@ -334,7 +345,7 @@ func (p *Podman) CleanStale(ctx context.Context, prefix string) {
 	match := prefix + "-"
 	for name := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		if name != "" && strings.HasPrefix(name, match) {
-			rm := exec.CommandContext(ctx, p.bin(), "rm", "-f", name)
+			rm := p.command(ctx, "rm", "-f", name)
 			slog.Debug("exec", "cmd", rm.Args)
 			_ = rm.Run()
 		}
@@ -344,7 +355,7 @@ func (p *Podman) CleanStale(ctx context.Context, prefix string) {
 func (p *Podman) Stop(ctx context.Context, names ...string) error {
 	var hasErrored error
 	for _, name := range names {
-		cmd := exec.CommandContext(ctx, p.bin(), "stop", "-t", "5", name)
+		cmd := p.command(ctx, "stop", "-t", "5", name)
 		slog.Debug("exec", "cmd", cmd.Args)
 		err := cmd.Run()
 		if err != nil && hasErrored == nil {
@@ -357,7 +368,7 @@ func (p *Podman) Stop(ctx context.Context, names ...string) error {
 func (p *Podman) Remove(ctx context.Context, names ...string) error {
 	var hasErrored error
 	for _, name := range names {
-		cmd := exec.CommandContext(ctx, p.bin(), "rm", "-f", name)
+		cmd := p.command(ctx, "rm", "-f", name)
 		slog.Debug("exec", "cmd", cmd.Args)
 		err := cmd.Run()
 		if err != nil && hasErrored == nil {
@@ -368,7 +379,7 @@ func (p *Podman) Remove(ctx context.Context, names ...string) error {
 }
 
 func (p *Podman) IsRootless(ctx context.Context) (bool, error) {
-	cmd := exec.CommandContext(ctx, p.bin(), "info", "-f", "json")
+	cmd := p.command(ctx, "info", "-f", "json")
 	out, err := cmd.Output()
 	if err != nil {
 		return false, err
@@ -387,7 +398,7 @@ func (p *Podman) IsRootless(ctx context.Context) (bool, error) {
 }
 
 func (p *Podman) ImageID(ctx context.Context, image string) (string, error) {
-	cmd := exec.CommandContext(ctx, p.bin(), "image", "inspect", "--format", "{{.Id}}", image)
+	cmd := p.command(ctx, "image", "inspect", "--format", "{{.Id}}", image)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -396,8 +407,8 @@ func (p *Podman) ImageID(ctx context.Context, image string) (string, error) {
 }
 
 func (p *Podman) PushImage(ctx context.Context, sidecar string, images []string) error {
-	saveCmd := exec.CommandContext(ctx, p.bin(), append([]string{"save"}, images...)...)
-	loadCmd := exec.CommandContext(ctx, p.bin(),
+	saveCmd := p.command(ctx, append([]string{"save"}, images...)...)
+	loadCmd := p.command(ctx,
 		"exec", "-i",
 		"-e", "CONTAINER_HOST="+SidecarAPI,
 		sidecar,
@@ -437,7 +448,7 @@ func (p *Podman) Log(ctx context.Context, ctr string, source, msg string) error 
 
 func (p *Podman) Logs(ctx context.Context, ctr string) ([]byte, error) {
 	var buf bytes.Buffer
-	cmd := exec.CommandContext(ctx, p.bin(), "logs", "--timestamps", ctr)
+	cmd := p.command(ctx, "logs", "--timestamps", ctr)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	slog.Debug("exec", "cmd", cmd.Args)

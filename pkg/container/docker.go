@@ -20,23 +20,51 @@ import (
 
 // Docker implements Runtime for docker.
 type Docker struct {
-	selinux     bool
-	selinuxOnce sync.Once
+	probeOnce sync.Once
+	debug     bool
+	native    bool // daemon runs on the same kernel (not a VM)
+	selinux   bool // daemon has SELinux enabled
 }
 
-func (d *Docker) Name() string { return nameDocker }
-func (d *Docker) bin() string  { return nameDocker }
+func (d *Docker) Name() string    { return nameDocker }
+func (d *Docker) SetDebug(v bool) { d.debug = v }
+
+// command builds an exec.Cmd with the runtime binary and global flags
+// (e.g. --log-level=debug) prepended before the subcommand args.
+func (d *Docker) command(ctx context.Context, args ...string) *exec.Cmd {
+	if d.debug {
+		args = append([]string{"--log-level=debug"}, args...)
+	}
+	return exec.CommandContext(ctx, nameDocker, args...)
+}
 
 func (d *Docker) uid() string { return strconv.Itoa(os.Getuid()) }
 func (d *Docker) gid() string { return strconv.Itoa(os.Getgid()) }
 
-// mountOpt builds a volume option suffix like ":ro,nosuid,z" from the
-// given flags. Appends "z" (SELinux relabeling) when the daemon has
-// SELinux enabled. Returns "" when no options apply.
-func (d *Docker) mountOpt(opts ...string) string {
-	d.selinuxOnce.Do(func() {
+// probe queries the Docker daemon once for capability detection.
+func (d *Docker) probe() {
+	d.probeOnce.Do(func() {
+		native, err := d.IsNative(context.Background())
+		if err == nil {
+			d.native = native
+		}
 		d.selinux = d.hasSecurityOption("selinux")
 	})
+}
+
+// mountOpt builds a volume option suffix like ":ro,nosuid,z" from the
+// given flags. Filters options based on daemon capabilities:
+//   - "z" is appended when SELinux is enabled (rejected by Docker Desktop)
+//   - "nosuid"/"nodev" are dropped when non-native (VM filesystems reject them)
+//
+// Returns "" when no options remain.
+func (d *Docker) mountOpt(opts ...string) string {
+	d.probe()
+	if !d.native {
+		opts = slices.DeleteFunc(opts, func(s string) bool {
+			return s == "nosuid" || s == "nodev"
+		})
+	}
 	if d.selinux {
 		opts = append(opts, "z")
 	}
@@ -51,7 +79,7 @@ func (d *Docker) mountOpt(opts ...string) string {
 func (d *Docker) hasSecurityOption(name string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, d.bin(), "info", "-f", "json").Output()
+	out, err := d.command(ctx, "info", "-f", "json").Output()
 	if err != nil {
 		return false
 	}
@@ -141,7 +169,7 @@ func (d *Docker) StartSidecar(ctx context.Context, cfg SidecarContainerConfig) e
 	}
 	args = append(args, cfg.Image)
 
-	cmd := exec.CommandContext(ctx, d.bin(), args...)
+	cmd := d.command(ctx, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	slog.Debug("exec", "cmd", cmd.Args)
@@ -179,7 +207,7 @@ func (d *Docker) StartProxy(ctx context.Context, cfg ProxyContainerConfig) error
 
 	args = append(args, cfg.Image)
 
-	cmd := exec.CommandContext(ctx, d.bin(), args...)
+	cmd := d.command(ctx, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	slog.Debug("exec", "cmd", cmd.Args)
@@ -240,7 +268,7 @@ func (d *Docker) StartAgent(ctx context.Context, cfg AgentContainerConfig) error
 	args = append(args, "--workdir", cfg.Workdir, cfg.Image)
 	args = append(args, cfg.EntrypointArgs...)
 
-	cmd := exec.CommandContext(ctx, d.bin(), args...)
+	cmd := d.command(ctx, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -256,9 +284,6 @@ func (d *Docker) MountFlags(cfg AgentContainerConfig) []string {
 			var opts []string
 			if m.RO {
 				opts = append(opts, "ro")
-			}
-			if m.Hardened {
-				opts = append(opts, "nosuid", "nodev")
 			}
 			flags = append(flags, "-v", m.Source+":"+m.Dest+d.mountOpt(opts...))
 		case DevNull:
@@ -280,7 +305,7 @@ func (d *Docker) Exec(
 	args = append(args, ctr)
 	args = append(args, cmd...)
 
-	c := exec.CommandContext(ctx, d.bin(), args...)
+	c := d.command(ctx, args...)
 	slog.Debug("exec", "cmd", c.Args)
 	return c.CombinedOutput()
 }
@@ -289,7 +314,7 @@ func (d *Docker) ExecStdin(
 	ctx context.Context, ctr string, cmd []string, stdin []byte,
 ) ([]byte, error) {
 	args := append([]string{"exec", "-i", ctr}, cmd...)
-	c := exec.CommandContext(ctx, d.bin(), args...)
+	c := d.command(ctx, args...)
 	c.Stdin = bytes.NewReader(stdin)
 	slog.Debug("exec-stdin", "cmd", c.Args)
 	return c.CombinedOutput()
@@ -300,7 +325,7 @@ func (d *Docker) List(ctx context.Context, labels map[string]string) ([]Info, er
 	for k, v := range labels {
 		args = append(args, "--filter", "label="+k+"="+v)
 	}
-	cmd := exec.CommandContext(ctx, d.bin(), args...)
+	cmd := d.command(ctx, args...)
 	slog.Debug("exec", "cmd", cmd.Args)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -354,7 +379,7 @@ func (d *Docker) Prune(ctx context.Context, projectDir string) error {
 		"clampdown-" + d.Name() + "-" + hash + "-cache",
 		"clampdown-" + d.Name() + "-" + hash + "-tmp",
 	}
-	_ = exec.CommandContext(ctx, d.bin(), append([]string{"volume", "rm", "--force"}, vols...)...).Run()
+	_ = d.command(ctx, append([]string{"volume", "rm", "--force"}, vols...)...).Run()
 
 	// Remaining host dirs: <rt>-home, <rt>-state.
 	dirs, err := filepath.Glob(filepath.Join(projectDir, d.Name()+"-*"))
@@ -371,14 +396,14 @@ func (d *Docker) Prune(ctx context.Context, projectDir string) error {
 		"alpine:latest", "rm", "-rf",
 	}
 	args = append(args, dirs...)
-	cmd := exec.CommandContext(ctx, d.bin(), args...)
+	cmd := d.command(ctx, args...)
 	cmd.Stderr = os.Stderr
 	slog.Debug("exec", "cmd", cmd.Args)
 	return cmd.Run()
 }
 
 func (d *Docker) CleanStale(ctx context.Context, prefix string) {
-	cmd := exec.CommandContext(ctx, d.bin(),
+	cmd := d.command(ctx,
 		"ps", "-a",
 		"--filter", "status=exited",
 		"--filter", "status=dead",
@@ -393,7 +418,7 @@ func (d *Docker) CleanStale(ctx context.Context, prefix string) {
 	match := prefix + "-"
 	for name := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		if name != "" && strings.HasPrefix(name, match) {
-			rm := exec.CommandContext(ctx, d.bin(), "rm", "-f", name)
+			rm := d.command(ctx, "rm", "-f", name)
 			slog.Debug("exec", "cmd", rm.Args)
 			_ = rm.Run()
 		}
@@ -403,7 +428,7 @@ func (d *Docker) CleanStale(ctx context.Context, prefix string) {
 func (d *Docker) Stop(ctx context.Context, names ...string) error {
 	var hasErrored error
 	for _, name := range names {
-		cmd := exec.CommandContext(ctx, d.bin(), "stop", "-t", "5", name)
+		cmd := d.command(ctx, "stop", "-t", "5", name)
 		slog.Debug("exec", "cmd", cmd.Args)
 		err := cmd.Run()
 		if err != nil && hasErrored == nil {
@@ -416,7 +441,7 @@ func (d *Docker) Stop(ctx context.Context, names ...string) error {
 func (d *Docker) Remove(ctx context.Context, names ...string) error {
 	var hasErrored error
 	for _, name := range names {
-		cmd := exec.CommandContext(ctx, d.bin(), "rm", "-f", name)
+		cmd := d.command(ctx, "rm", "-f", name)
 		slog.Debug("exec", "cmd", cmd.Args)
 		err := cmd.Run()
 		if err != nil && hasErrored == nil {
@@ -427,7 +452,7 @@ func (d *Docker) Remove(ctx context.Context, names ...string) error {
 }
 
 func (d *Docker) IsRootless(ctx context.Context) (bool, error) {
-	cmd := exec.CommandContext(ctx, d.bin(), "info", "-f", "json")
+	cmd := d.command(ctx, "info", "-f", "json")
 	out, err := cmd.Output()
 	if err != nil {
 		return false, err
@@ -442,7 +467,7 @@ func (d *Docker) IsRootless(ctx context.Context) (bool, error) {
 }
 
 func (d *Docker) ImageID(ctx context.Context, image string) (string, error) {
-	cmd := exec.CommandContext(ctx, d.bin(), "image", "inspect", "--format", "{{.Id}}", image)
+	cmd := d.command(ctx, "image", "inspect", "--format", "{{.Id}}", image)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -451,8 +476,8 @@ func (d *Docker) ImageID(ctx context.Context, image string) (string, error) {
 }
 
 func (d *Docker) PushImage(ctx context.Context, sidecar string, images []string) error {
-	saveCmd := exec.CommandContext(ctx, d.bin(), append([]string{"save"}, images...)...)
-	loadCmd := exec.CommandContext(ctx, d.bin(),
+	saveCmd := d.command(ctx, append([]string{"save"}, images...)...)
+	loadCmd := d.command(ctx,
 		"exec", "-i",
 		"-e", "CONTAINER_HOST="+SidecarAPI,
 		sidecar,
@@ -492,7 +517,7 @@ func (d *Docker) Log(ctx context.Context, ctr string, source, msg string) error 
 
 func (d *Docker) Logs(ctx context.Context, ctr string) ([]byte, error) {
 	var buf bytes.Buffer
-	cmd := exec.CommandContext(ctx, d.bin(), "logs", "--timestamps", ctr)
+	cmd := d.command(ctx, "logs", "--timestamps", ctr)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	slog.Debug("exec", "cmd", cmd.Args)

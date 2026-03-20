@@ -314,6 +314,7 @@ func runAgent(agName string, cfg Config) ucli.ActionFunc {
 		if err != nil {
 			return err
 		}
+		rt.SetDebug(cmd.String("log-level") == "debug")
 
 		ag, err := agent.Get(agName)
 		if err != nil {
