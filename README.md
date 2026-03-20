@@ -168,13 +168,36 @@ access sets, capability lists, OCI hook pipeline, and masked path inventory -- s
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Linux | -- | Landlock is Linux-only |
-| Kernel | >= 6.2 | Hard requirement. Session refuses to start below this. |
+| Linux kernel | >= 6.2 | Hard requirement (Landlock V3). Runs natively or in a VM (see below). |
 | Kernel | >= 6.12 | Recommended. V4 TCP connect (6.7), V5 IoctlDev (6.10), V6 IPC scoping (6.12). V7 audit logging (6.15). |
-| rootless podman | any recent | or Docker (rootful with a warning) or nerdctl |
+| Container runtime | any recent | rootless podman (preferred), Docker, or nerdctl |
 | Go | >= 1.23 | Build-time only |
 
-Verify Landlock is active on your kernel:
+### Platform support
+
+| Platform | Runtime | Status |
+|----------|---------|--------|
+| Linux (native) | podman, docker | Full support. All security layers active. |
+| Linux / macOS | podman machine | Full support. Containers run in a Linux VM with full Landlock. |
+| Linux / macOS | docker + colima | Full support. Containers run in a Linux VM with full Landlock. |
+| macOS | Docker Desktop | **Not supported.** Its `fakeowner` filesystem breaks Landlock enforcement. |
+
+VM backends (podman machine, colima) run containers inside a Linux VM.
+All security layers (Landlock, seccomp, iptables, OCI hooks) execute
+inside the VM kernel, identical to native Linux. The VM boundary adds
+an extra isolation layer — a kernel exploit inside the VM cannot reach
+the host.
+
+```sh
+# podman machine (any platform)
+podman machine start
+
+# colima + docker (Linux / macOS)
+colima start
+docker context use colima
+```
+
+Verify Landlock is active (Linux or inside the VM):
 
 ```sh
 cat /sys/kernel/security/lsm   # must contain "landlock"
@@ -499,23 +522,9 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidelines.
 
 # Future work
 
-**VM backend** 
-  - lima/colima-based runtime that isolates at the hypervisor boundary.
-    - Required for workloads needing `NET_ADMIN`, KVM, or GPU access. 
-    - One long-lived VM per user, multiple agent sessions sharing it.
-
-**Structured audit trail** 
-  - a tamper-evident JSONL event log written by the sidecar
-  (outside agent reach): every podman API call, OCI hook decision (allow/deny/mutate),
-  iptables egress hit, and tripwire trigger. SHA-256 hash chain per entry. Queryable
-  from the host, with optional webhook notifications (Slack/HTTP) on deny or kill events.
-
-**More agents** 
-  - Gemini CLI 
-  - OpenAI Codex. 
-
-**macOS support**
-  - depends on the VM backend; Landlock and iptables are Linux-only.
+**More agents**
+  - Gemini CLI
+  - OpenAI Codex.
 
 ---
 

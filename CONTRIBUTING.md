@@ -8,6 +8,9 @@ Bug reports, fixes, and improvements are welcome. This document covers how to co
 
 1. Fork the repository and create a branch from `main`.
 2. Build everything: `make all` (requires Go and podman or docker).
+   - VM backends (podman machine, colima) are supported on all platforms.
+   - Docker Desktop is not supported (fakeowner filesystem breaks Landlock).
+   - Container image binaries are cross-compiled for Linux automatically.
 3. Run tests: `make test`.
 4. Submit a pull request.
 

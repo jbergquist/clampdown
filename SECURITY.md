@@ -37,11 +37,14 @@ These are accepted design constraints, not bugs. They are disclosed here so user
 **Egress filtering is IP-based, not domain-based.**
 The agent firewall resolves the domain allowlist to IP addresses at session startup and installs iptables rules for those IPs. A sufficiently motivated agent could exfiltrate data via DNS queries (rate-limited to 10/s) or by using allowlisted IP addresses after connecting through them. A DNS-intercepting proxy would close this gap but is not currently implemented.
 
-**No kernel isolation boundary.**
-Clampdown uses containers, not virtual machines. The agent shares the host
-kernel. A kernel exploit executed by the agent could break out of all
-container-level protections. This section documents exactly what clampdown
+**No kernel isolation boundary (containers share the VM/host kernel).**
+Clampdown uses containers, not hypervisor VMs. On native Linux, the agent
+shares the host kernel.
+A kernel exploit could break out of container-level protections within the Linux
+kernel the containers run on. This section documents exactly what clampdown
 can and cannot prevent.
+It is possible to use a VM backend (podman machine, colima),
+so the host kernel is not exposed.
 
 *What clampdown mitigates.*
 
@@ -65,12 +68,21 @@ The host-side inotify tripwire detects post-exploitation host file
 modifications and restores from sha256-verified snapshots. It cannot
 prevent the exploit — it detects and contains the damage after the fact.
 
-### VM based isolation is planned for the future
+### VM-level isolation
 
-This will be basically a VM that runs the whole stack inside.
-Advisable for profiles where isolation from host is paramaount.
+When using a VM backend (podman machine, colima), clampdown runs inside
+a Linux VM. The host kernel is never exposed to the agent. A kernel
+exploit inside the VM cannot reach the host, it is contained by the
+hypervisor boundary.
+
+On native Linux (no VM), containers share the host kernel directly. Users
+who want stronger isolation can use podman machine or colima even on Linux.
+Advisable for profiles where isolation from the host kernel is paramount.
 
 ## Kernel requirements
+
+These apply to the Linux kernel the containers run on — the host kernel
+on native Linux, or the VM kernel on macOS (podman machine / colima).
 
 | Requirement | Minimum kernel | Behavior if absent |
 |-------------|---------------|---------------------|
@@ -80,3 +92,15 @@ Advisable for profiles where isolation from host is paramaount.
 | Landlock V6 (IPC scoping) | 6.12 | Warning — abstract unix socket + signal isolation degraded |
 | Landlock V7 (audit logging) | 6.15 | BestEffort — denied access logging unavailable |
 | cgroup v2 | 5.2 | Required for `pids_limit` enforcement |
+
+### VM backend security properties
+
+When running via podman machine or colima, the VM boundary provides
+additional isolation that native Linux containers lack:
+
+- The host kernel is not exposed to the agent (hypervisor boundary).
+- A kernel exploit inside the VM is contained by the hypervisor.
+- The VM kernel (Fedora / Ubuntu) ships with full Landlock support.
+- Docker Desktop is explicitly blocked at the moment: its `fakeowner` FUSE filesystem
+  is incompatible with Landlock enforcement. Use colima or podman machine
+  instead.
