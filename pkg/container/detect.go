@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 const (
@@ -31,6 +32,17 @@ func ForName(name string) (Runtime, error) {
 		return nil, fmt.Errorf("container runtime %q not found in PATH", name)
 	}
 	return forName(name)
+}
+
+// UnameRelease returns the host kernel release string (same as `uname -r`).
+// Returns "" on error.
+func UnameRelease() string {
+	//nolint: noctx // single shot command, no need for ctx
+	out, err := exec.Command("uname", "-r").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func forName(name string) (Runtime, error) {

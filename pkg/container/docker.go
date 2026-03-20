@@ -18,12 +18,20 @@ import (
 	"time"
 )
 
+// dockerDaemonInfo caches parsed fields from `docker info -f json`.
+type dockerDaemonInfo struct {
+	OperatingSystem string   `json:"OperatingSystem"`
+	SecurityOptions []string `json:"SecurityOptions"`
+	KernelVersion   string   `json:"KernelVersion"`
+}
+
 // Docker implements Runtime for docker.
 type Docker struct {
 	probeOnce sync.Once
 	debug     bool
 	native    bool // daemon runs on the same kernel (not a VM)
 	selinux   bool // daemon has SELinux enabled
+	daemonInfo dockerDaemonInfo
 }
 
 func (d *Docker) Name() string    { return nameDocker }
@@ -41,14 +49,18 @@ func (d *Docker) command(ctx context.Context, args ...string) *exec.Cmd {
 func (d *Docker) uid() string { return strconv.Itoa(os.Getuid()) }
 func (d *Docker) gid() string { return strconv.Itoa(os.Getgid()) }
 
-// probe queries the Docker daemon once for capability detection.
+// probe queries the Docker daemon once and caches the result.
+// All capability checks (SELinux, native, Docker Desktop) read from the cache.
 func (d *Docker) probe() {
 	d.probeOnce.Do(func() {
-		native, err := d.IsNative(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		out, err := d.command(ctx, "info", "-f", "json").Output()
 		if err == nil {
-			d.native = native
+			_ = json.Unmarshal(out, &d.daemonInfo)
 		}
-		d.selinux = d.hasSecurityOption("selinux")
+		d.native = UnameRelease() != "" && d.daemonInfo.KernelVersion == UnameRelease()
+		d.selinux = slices.Contains(d.daemonInfo.SecurityOptions, "name=selinux")
 	})
 }
 
@@ -72,22 +84,6 @@ func (d *Docker) mountOpt(opts ...string) string {
 		return ""
 	}
 	return ":" + strings.Join(opts, ",")
-}
-
-// hasSecurityOption checks whether the Docker daemon reports a given
-// security option (e.g. "selinux", "seccomp") in `docker info`.
-func (d *Docker) hasSecurityOption(name string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := d.command(ctx, "info", "-f", "json").Output()
-	if err != nil {
-		return false
-	}
-	var info struct {
-		SecurityOptions []string `json:"SecurityOptions"`
-	}
-	_ = json.Unmarshal(out, &info)
-	return slices.Contains(info.SecurityOptions, "name="+name)
 }
 
 func (d *Docker) StartSidecar(ctx context.Context, cfg SidecarContainerConfig) error {
@@ -451,19 +447,19 @@ func (d *Docker) Remove(ctx context.Context, names ...string) error {
 	return hasErrored
 }
 
-func (d *Docker) IsRootless(ctx context.Context) (bool, error) {
-	cmd := d.command(ctx, "info", "-f", "json")
-	out, err := cmd.Output()
-	if err != nil {
-		return false, err
-	}
-	var info struct {
-		SecurityOptions []string `json:"SecurityOptions"`
-	}
-	if err = json.Unmarshal(out, &info); err != nil {
-		return false, err
-	}
-	return slices.Contains(info.SecurityOptions, "name=rootless"), nil
+func (d *Docker) IsNative(_ context.Context) (bool, error) {
+	d.probe()
+	return d.native, nil
+}
+
+func (d *Docker) IsRootless(_ context.Context) (bool, error) {
+	d.probe()
+	return slices.Contains(d.daemonInfo.SecurityOptions, "name=rootless"), nil
+}
+
+func (d *Docker) IsDockerDesktop(_ context.Context) bool {
+	d.probe()
+	return d.daemonInfo.OperatingSystem == "Docker Desktop"
 }
 
 func (d *Docker) ImageID(ctx context.Context, image string) (string, error) {

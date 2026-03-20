@@ -15,6 +15,8 @@ type Runtime interface {
 	Exec(ctx context.Context, container string, cmd []string, env map[string]string) ([]byte, error)
 	ExecStdin(ctx context.Context, container string, cmd []string, stdin []byte) ([]byte, error)
 	ImageID(ctx context.Context, image string) (string, error)
+	IsDockerDesktop(ctx context.Context) bool
+	IsNative(ctx context.Context) (bool, error)
 	IsRootless(ctx context.Context) (bool, error)
 	List(ctx context.Context, labels map[string]string) ([]Info, error)
 	Log(ctx context.Context, container string, source, msg string) error

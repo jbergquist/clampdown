@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,8 +20,9 @@ type Podman struct {
 	debug bool
 }
 
-func (p *Podman) Name() string    { return namePodman }
-func (p *Podman) SetDebug(v bool) { p.debug = v }
+func (p *Podman) Name() string                           { return namePodman }
+func (p *Podman) SetDebug(v bool)                        { p.debug = v }
+func (p *Podman) IsDockerDesktop(_ context.Context) bool { return false }
 
 // command builds an exec.Cmd with the runtime binary and global flags
 // (e.g. --log-level=debug) prepended before the subcommand args.
@@ -376,6 +378,28 @@ func (p *Podman) Remove(ctx context.Context, names ...string) error {
 		}
 	}
 	return hasErrored
+}
+
+func (p *Podman) IsNative(ctx context.Context) (bool, error) {
+	host := UnameRelease()
+	if host == "" {
+		return false, errors.New("cannot detect kernel")
+	}
+
+	cmd := p.command(ctx, "info", "-f", "json")
+	out, err := cmd.Output()
+	if err != nil {
+		return false, errors.New("cannot detect kernel")
+	}
+
+	var info struct {
+		Host struct {
+			Kernel string `json:"kernel"`
+		} `json:"host"`
+	}
+	_ = json.Unmarshal(out, &info)
+
+	return info.Host.Kernel == host, nil
 }
 
 func (p *Podman) IsRootless(ctx context.Context) (bool, error) {

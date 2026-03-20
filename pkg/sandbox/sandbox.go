@@ -66,13 +66,10 @@ var errTamper = errors.New("session killed: read-only path tampered")
 //
 //nolint:gocognit,gocyclo,cyclop // Run orchestrates the full sandbox lifecycle: sidecar, proxy, agent, firewall, tripwire.
 func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options) error {
-	// We need landlock, fail if not present.
-	err := checkLandlock()
+	err := runPreflightChecks(ctx, rt)
 	if err != nil {
 		return err
 	}
-
-	checkYama()
 
 	// Resolve workdir: if HOME, use scratch dir.
 	if opts.Workdir == Home {
@@ -395,6 +392,38 @@ func warnIfRootful(ctx context.Context, rt container.Runtime) {
 		rt.Name())
 }
 
+// runPreflightChecks runs host kernel safety checks (Landlock, Yama).
+// Skipped when the container daemon runs on a different kernel (VM, remote),
+// since host kernel state is irrelevant in that case.
+func runPreflightChecks(ctx context.Context, rt container.Runtime) error {
+	if rt.IsDockerDesktop(ctx) {
+		return fmt.Errorf("Docker Desktop is not supported.\n" +
+			"  Its fakeowner filesystem is incompatible with Landlock.\n" +
+			"  Leading to a degraded security posture for the sandbox.\n" +
+			"  Use one of:\n" +
+			"    colima start && docker context use colima\n" +
+			"    podman machine start (and use podman runtime)")
+	}
+
+	native, err := rt.IsNative(ctx)
+	if err != nil {
+		return err
+	}
+
+	if !native {
+		return nil
+	}
+
+	err = checkLandlock()
+	if err != nil {
+		return err
+	}
+
+	checkYama()
+
+	return nil
+}
+
 // checkLandlock verifies Landlock LSM is available on the host kernel.
 //
 // Hard-fails if Landlock is confirmed absent (file readable, not in list).
@@ -435,23 +464,12 @@ func checkLandlock() error {
 // kernelVersion returns the major and minor kernel version from uname.
 // Returns (0, 0) on parse failure.
 func kernelVersion() (int, int) {
-	var buf syscall.Utsname
-	err := syscall.Uname(&buf)
-	if err != nil {
+	release := container.UnameRelease()
+	if release == "" {
 		return 0, 0
 	}
-
-	// buf.Release is [65]int8, e.g. "6.7.4-200.fc39.x86_64".
-	var release []byte
-	for _, b := range buf.Release {
-		if b == 0 {
-			break
-		}
-		release = append(release, byte(b))
-	}
-
 	var major, minor int
-	_, err = fmt.Sscanf(string(release), "%d.%d", &major, &minor)
+	_, err := fmt.Sscanf(release, "%d.%d", &major, &minor)
 	if err != nil {
 		return 0, 0
 	}
