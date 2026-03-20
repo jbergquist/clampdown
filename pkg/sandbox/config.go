@@ -37,7 +37,8 @@ type LandlockPolicy struct {
 	ReadOnly    []string `json:"read_only"`
 	WriteNoExec []string `json:"write_noexec"`
 	WriteExec   []string `json:"write_exec"`
-	ConnectTCP  []uint16 `json:"connect_tcp"`
+	ConnectTCP  []uint16 `json:"connect_tcp,omitempty"`
+	BindTCP     []uint16 `json:"bind_tcp,omitempty"`
 }
 
 func labels(session int, role string, ag agent.Agent, opts Options) map[string]string {
@@ -421,11 +422,13 @@ func ProxyConfig(
 	}
 
 	// Landlock policy for the proxy: read-only filesystem, execute
-	// only its own binary, TCP connect restricted to port 443.
+	// only its own binary, TCP connect restricted to port 443,
+	// bind restricted to its listen port.
 	proxyPolicy := LandlockPolicy{
 		ReadExec:   []string{"/usr/local/bin"},
 		ReadOnly:   []string{"/"},
 		ConnectTCP: []uint16{443, 53},
+		BindTCP:    []uint16{route.Port},
 	}
 	data, _ := json.Marshal(proxyPolicy)
 	env["SANDBOX_POLICY"] = string(data)

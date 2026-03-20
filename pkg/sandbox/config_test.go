@@ -76,6 +76,11 @@ func TestAgentLandlockPolicy(t *testing.T) {
 	if len(p.ConnectTCP) != 0 {
 		t.Errorf("ConnectTCP should be empty with nil ports, got %v", p.ConnectTCP)
 	}
+
+	// BindTCP always empty for agent (unrestricted bind)
+	if len(p.BindTCP) != 0 {
+		t.Errorf("BindTCP should be empty for agent, got %v", p.BindTCP)
+	}
 }
 
 func TestAgentLandlockPolicy_WithConnectTCP(t *testing.T) {
@@ -103,6 +108,11 @@ func TestAgentLandlockPolicy_WithConnectTCP(t *testing.T) {
 	}
 	if p.ConnectTCP[1] != 8001 {
 		t.Errorf("ConnectTCP[1] = %d, want 8001", p.ConnectTCP[1])
+	}
+
+	// ConnectTCP does not imply BindTCP
+	if len(p.BindTCP) != 0 {
+		t.Errorf("BindTCP should be empty even with ConnectTCP set, got %v", p.BindTCP)
 	}
 }
 

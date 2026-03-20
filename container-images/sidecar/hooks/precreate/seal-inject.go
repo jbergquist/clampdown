@@ -29,7 +29,8 @@ type landlockPolicy struct {
 	ReadOnly    []string `json:"read_only"`
 	WriteNoExec []string `json:"write_noexec"`
 	WriteExec   []string `json:"write_exec"`
-	ConnectTCP  []uint16 `json:"connect_tcp"`
+	ConnectTCP  []uint16 `json:"connect_tcp,omitempty"`
+	BindTCP     []uint16 `json:"bind_tcp,omitempty"`
 }
 
 type mount struct {
@@ -349,8 +350,8 @@ func main() {
 	if config["hostname"] != nil {
 		_ = json.Unmarshal(config["hostname"], &name)
 	}
-	logf("PASS: name=%s write_exec=%v connect_tcp=%v",
-		name, policy.WriteExec, policy.ConnectTCP)
+	logf("PASS: name=%s write_exec=%v connect_tcp=%v bind_tcp=%v",
+		name, policy.WriteExec, policy.ConnectTCP, policy.BindTCP)
 
 	os.Stdout.Write(output)
 }

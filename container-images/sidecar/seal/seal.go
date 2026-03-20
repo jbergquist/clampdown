@@ -23,15 +23,19 @@ import (
 //   - write_noexec:  read_only + write/delete/create. No execute, no device nodes.
 //   - write_exec:    write_noexec + execute + cross-dir rename. For workdir.
 //
-// connect_tcp: allowed outbound TCP ports.
+// connect_tcp / bind_tcp: allowed outbound/inbound TCP ports.
 //   - Non-empty: restrict to listed ports (V4+).
-//   - Empty/nil: don't restrict TCP (no network domain created).
+//   - Empty/nil: don't restrict (no domain created for that access type).
+//
+// ConnectTCP and BindTCP are enforced as independent Landlock domains.
+// Specifying only ConnectTCP does not restrict bind, and vice versa.
 type policy struct {
 	ReadExec    []string `json:"read_exec"`
 	ReadOnly    []string `json:"read_only"`
 	WriteNoExec []string `json:"write_noexec"`
 	WriteExec   []string `json:"write_exec"`
 	ConnectTCP  []uint16 `json:"connect_tcp"`
+	BindTCP     []uint16 `json:"bind_tcp"`
 }
 
 const policyEnv = "SANDBOX_POLICY"
@@ -227,17 +231,36 @@ func applyLandlock(p policy) error {
 		return fmt.Errorf("restrict scoped: %w", err)
 	}
 
-	// TCP connect (V4+) — only when ports are listed. Empty means
-	// "don't restrict TCP" (no network domain created, avoids
-	// denying all connect).
+	// TCP connect (V4+) — separate domain that only handles ConnectTCP.
+	// Using MustConfig(AccessNetSet) instead of cfg.RestrictNet because
+	// V7's RestrictNet handles both bind_tcp and connect_tcp together —
+	// passing only ConnectTCP rules would deny all binds on V4+ kernels.
 	if len(p.ConnectTCP) > 0 {
-		var netRules []landlock.Rule
+		connectCfg := landlock.MustConfig(landlock.AccessNetSet(llsyscall.AccessNetConnectTCP)).
+			BestEffort().
+			EnableLoggingForSubprocesses()
+		var rules []landlock.Rule
 		for _, port := range p.ConnectTCP {
-			netRules = append(netRules, landlock.ConnectTCP(port))
+			rules = append(rules, landlock.ConnectTCP(port))
 		}
-		err = cfg.RestrictNet(netRules...)
+		err = connectCfg.RestrictNet(rules...)
 		if err != nil {
-			return fmt.Errorf("restrict net: %w", err)
+			return fmt.Errorf("restrict connect: %w", err)
+		}
+	}
+
+	// TCP bind (V4+) — separate domain that only handles BindTCP.
+	if len(p.BindTCP) > 0 {
+		bindCfg := landlock.MustConfig(landlock.AccessNetSet(llsyscall.AccessNetBindTCP)).
+			BestEffort().
+			EnableLoggingForSubprocesses()
+		var rules []landlock.Rule
+		for _, port := range p.BindTCP {
+			rules = append(rules, landlock.BindTCP(port))
+		}
+		err = bindCfg.RestrictNet(rules...)
+		if err != nil {
+			return fmt.Errorf("restrict bind: %w", err)
 		}
 	}
 
