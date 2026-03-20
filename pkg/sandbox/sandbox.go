@@ -397,7 +397,7 @@ func warnIfRootful(ctx context.Context, rt container.Runtime) {
 // since host kernel state is irrelevant in that case.
 func runPreflightChecks(ctx context.Context, rt container.Runtime) error {
 	if rt.IsDockerDesktop(ctx) {
-		return fmt.Errorf("Docker Desktop is not supported.\n" +
+		return errors.New("docker Desktop is not supported.\n" +
 			"  Its fakeowner filesystem is incompatible with Landlock.\n" +
 			"  Leading to a degraded security posture for the sandbox.\n" +
 			"  Use one of:\n" +
