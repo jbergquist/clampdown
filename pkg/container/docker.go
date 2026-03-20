@@ -14,17 +14,53 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 // Docker implements Runtime for docker.
-type Docker struct{}
+type Docker struct {
+	selinux     bool
+	selinuxOnce sync.Once
+}
 
 func (d *Docker) Name() string { return nameDocker }
 func (d *Docker) bin() string  { return nameDocker }
 
 func (d *Docker) uid() string { return strconv.Itoa(os.Getuid()) }
 func (d *Docker) gid() string { return strconv.Itoa(os.Getgid()) }
+
+// mountOpt builds a volume option suffix like ":ro,nosuid,z" from the
+// given flags. Appends "z" (SELinux relabeling) when the daemon has
+// SELinux enabled. Returns "" when no options apply.
+func (d *Docker) mountOpt(opts ...string) string {
+	d.selinuxOnce.Do(func() {
+		d.selinux = d.hasSecurityOption("selinux")
+	})
+	if d.selinux {
+		opts = append(opts, "z")
+	}
+	if len(opts) == 0 {
+		return ""
+	}
+	return ":" + strings.Join(opts, ",")
+}
+
+// hasSecurityOption checks whether the Docker daemon reports a given
+// security option (e.g. "selinux", "seccomp") in `docker info`.
+func (d *Docker) hasSecurityOption(name string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, d.bin(), "info", "-f", "json").Output()
+	if err != nil {
+		return false
+	}
+	var info struct {
+		SecurityOptions []string `json:"SecurityOptions"`
+	}
+	_ = json.Unmarshal(out, &info)
+	return slices.Contains(info.SecurityOptions, "name="+name)
+}
 
 func (d *Docker) StartSidecar(ctx context.Context, cfg SidecarContainerConfig) error {
 	args := []string{"run", "-d", "--name", cfg.Name,
@@ -67,12 +103,12 @@ func (d *Docker) StartSidecar(ctx context.Context, cfg SidecarContainerConfig) e
 		args = append(args, "--label", k+"="+v)
 	}
 
-	args = append(args, "-v", cfg.Workdir+":"+cfg.Workdir+":z")
+	args = append(args, "-v", cfg.Workdir+":"+cfg.Workdir+d.mountOpt())
 	// Protected paths — read-only overlays on sensitive workdir paths.
 	for _, m := range cfg.ProtectedPaths {
 		switch m.Type {
 		case Bind:
-			args = append(args, "-v", m.Source+":"+m.Dest+":ro,z")
+			args = append(args, "-v", m.Source+":"+m.Dest+d.mountOpt("ro"))
 		case DevNull:
 			args = append(args, "-v", "/dev/null:"+m.Dest+":ro")
 		case EmptyRO:
@@ -98,10 +134,10 @@ func (d *Docker) StartSidecar(ctx context.Context, cfg SidecarContainerConfig) e
 		"-v", cfg.TempVolume+":/var/tmp",
 	)
 	if cfg.AuthFile != "" {
-		args = append(args, "-v", cfg.AuthFile+":/root/.config/containers/auth.json:ro,z")
+		args = append(args, "-v", cfg.AuthFile+":/root/.config/containers/auth.json"+d.mountOpt("ro"))
 	}
 	for _, m := range cfg.Mounts {
-		args = append(args, "-v", m.Source+":"+m.Dest+":ro,z")
+		args = append(args, "-v", m.Source+":"+m.Dest+d.mountOpt("ro"))
 	}
 	args = append(args, cfg.Image)
 
@@ -217,14 +253,14 @@ func (d *Docker) MountFlags(cfg AgentContainerConfig) []string {
 	for _, m := range cfg.Mounts {
 		switch m.Type {
 		case Bind:
-			opt := ":z"
+			var opts []string
 			if m.RO {
-				opt = ":ro,z"
+				opts = append(opts, "ro")
 			}
 			if m.Hardened {
-				opt += ",nosuid,nodev"
+				opts = append(opts, "nosuid", "nodev")
 			}
-			flags = append(flags, "-v", m.Source+":"+m.Dest+opt)
+			flags = append(flags, "-v", m.Source+":"+m.Dest+d.mountOpt(opts...))
 		case DevNull:
 			flags = append(flags, "-v", "/dev/null:"+m.Dest+":ro")
 		case EmptyRO:
