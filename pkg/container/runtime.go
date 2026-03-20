@@ -66,7 +66,7 @@ var RegistryDomains = []string{
 // SidecarContainerConfig describes the sidecar container. Not agent-specific.
 type SidecarContainerConfig struct {
 	AuthFile       string
-	CacheDir       string
+	CacheVolume    string
 	Capabilities   []string
 	Devices        []string
 	Env            map[string]string
@@ -78,8 +78,8 @@ type SidecarContainerConfig struct {
 	MaskedPaths    []MountSpec // DevNull/EmptyRO overlays hiding secret content
 	Resources      Resources
 	SeccompProfile string
-	StorageDir     string
-	TempDir        string
+	StorageVolume  string // named volume for container image storage
+	TempVolume     string
 	Workdir        string
 }
 

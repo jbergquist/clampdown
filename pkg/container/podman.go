@@ -90,11 +90,11 @@ func (p *Podman) StartSidecar(ctx context.Context, cfg SidecarContainerConfig) e
 		}
 	}
 	args = append(args,
-		"-v", cfg.StorageDir+":/var/lib/containers/storage:z",
-		"-v", cfg.CacheDir+":/var/lib/containers/cache:z",
-		"-v", cfg.CacheDir+":/var/cache/containers:z",
-		"-v", cfg.TempDir+":/tmp:z",
-		"-v", cfg.TempDir+":/var/tmp:z",
+		"-v", cfg.StorageVolume+":/var/lib/containers/storage",
+		"-v", cfg.CacheVolume+":/var/lib/containers/cache",
+		"-v", cfg.CacheVolume+":/var/cache/containers",
+		"-v", cfg.TempVolume+":/tmp",
+		"-v", cfg.TempVolume+":/var/tmp",
 	)
 	if cfg.AuthFile != "" {
 		args = append(args, "-v", cfg.AuthFile+":/root/.config/containers/auth.json:ro,z")
@@ -293,6 +293,15 @@ func (p *Podman) List(ctx context.Context, labels map[string]string) ([]Info, er
 }
 
 func (p *Podman) Prune(ctx context.Context, projectDir string) error {
+	hash := filepath.Base(projectDir)
+	vols := []string{
+		"clampdown-" + p.Name() + "-" + hash + "-storage",
+		"clampdown-" + p.Name() + "-" + hash + "-cache",
+		"clampdown-" + p.Name() + "-" + hash + "-tmp",
+	}
+	_ = exec.CommandContext(ctx, p.bin(), append([]string{"volume", "rm", "--force"}, vols...)...).Run()
+
+	// Remaining host dirs: <rt>-home, <rt>-state.
 	dirs, err := filepath.Glob(filepath.Join(projectDir, p.Name()+"-*"))
 	if err != nil {
 		return fmt.Errorf("glob: %w", err)

@@ -54,11 +54,11 @@ func GenPaths(rtName, workdir string) ProjectPaths {
 	hash := projectHash(workdir)
 	project := filepath.Join(CacheBase, hash)
 	return ProjectPaths{
-		Cache:   filepath.Join(project, rtName+"-cache"),
+		Cache:   AppName + "-" + rtName + "-" + hash + "-cache",
 		Home:    filepath.Join(project, rtName+"-home"),
 		State:   filepath.Join(project, rtName+"-state"),
-		Storage: filepath.Join(project, rtName+"-storage"),
-		Temp:    filepath.Join(project, rtName+"-tmp"),
+		Storage: AppName + "-" + rtName + "-" + hash + "-storage",
+		Temp:    AppName + "-" + rtName + "-" + hash + "-tmp",
 	}
 }
 
@@ -68,7 +68,7 @@ func ProjectDir(workdir string) string {
 }
 
 func EnsurePaths(p ProjectPaths) error {
-	for _, d := range []string{p.Storage, p.Cache, p.Home, p.Temp, p.State} {
+	for _, d := range []string{p.Home, p.State} {
 		err := os.MkdirAll(d, 0o750)
 		if err != nil {
 			return fmt.Errorf("create dir %s: %w", d, err)

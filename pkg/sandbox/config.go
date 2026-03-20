@@ -67,9 +67,9 @@ func sidecarConfig(
 		Name:           name,
 		Image:          orDefault(opts.SidecarImage, SidecarImage),
 		Workdir:        opts.Workdir,
-		StorageDir:     p.Storage,
-		CacheDir:       p.Cache,
-		TempDir:        p.Temp,
+		StorageVolume:  p.Storage,
+		CacheVolume:    p.Cache,
+		TempVolume:     p.Temp,
 		ProtectedPaths: SidecarProtectedPaths(opts.Workdir, opts.AllowHooks, opts.ProtectPaths, masked),
 		Capabilities: []string{
 			"CHOWN",
