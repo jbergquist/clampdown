@@ -319,16 +319,13 @@ func (p *Podman) Prune(ctx context.Context, projectDir string) error {
 	if err != nil {
 		return fmt.Errorf("glob: %w", err)
 	}
-	if len(dirs) == 0 {
-		return nil
+	for _, dir := range dirs {
+		err = os.RemoveAll(dir)
+		if err != nil {
+			return fmt.Errorf("remove %s: %w", dir, err)
+		}
 	}
-	// podman unshare enters the user namespace so rm can access
-	// files created by rootless podman with shifted UIDs.
-	args := append([]string{"unshare", "rm", "-rf"}, dirs...)
-	cmd := p.command(ctx, args...)
-	cmd.Stderr = os.Stderr
-	slog.Debug("exec", "cmd", cmd.Args)
-	return cmd.Run()
+	return nil
 }
 
 func (p *Podman) CleanStale(ctx context.Context, prefix string) {

@@ -382,20 +382,13 @@ func (d *Docker) Prune(ctx context.Context, projectDir string) error {
 	if err != nil {
 		return fmt.Errorf("glob: %w", err)
 	}
-	if len(dirs) == 0 {
-		return nil
+	for _, dir := range dirs {
+		err = os.RemoveAll(dir)
+		if err != nil {
+			return fmt.Errorf("remove %s: %w", dir, err)
+		}
 	}
-	// Docker creates files as root. Use a container to remove them.
-	args := []string{
-		"run", "--rm",
-		"-v", projectDir + ":" + projectDir,
-		"alpine:latest", "rm", "-rf",
-	}
-	args = append(args, dirs...)
-	cmd := d.command(ctx, args...)
-	cmd.Stderr = os.Stderr
-	slog.Debug("exec", "cmd", cmd.Args)
-	return cmd.Run()
+	return nil
 }
 
 func (d *Docker) CleanStale(ctx context.Context, prefix string) {
