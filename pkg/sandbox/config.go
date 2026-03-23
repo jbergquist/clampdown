@@ -148,6 +148,7 @@ func agentConfig(
 			"CONTAINER_HOST":  container.SidecarAPI,
 			"DOCKER_HOST":     container.SidecarAPI,
 			"HOME":            Home,
+			"SANDBOX_CACHE":   filepath.Join(opts.Workdir, "."+ag.Name(), strconv.Itoa(session)),
 			"SANDBOX_POLICY":  policyJSON,
 			"SANDBOX_SESSION": strconv.Itoa(session),
 			"TERM":            os.Getenv("TERM"),

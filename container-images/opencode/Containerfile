@@ -39,6 +39,7 @@ RUN apk add --no-cache \
     && ln -s podman-remote /usr/bin/podman \
     && ln -s podman-remote /usr/bin/docker
 
+ENV SHELL=/bin/bash
 ENV BASH_ENV=/etc/sandbox_command_helper.sh
 ENV LD_PRELOAD=/usr/local/lib/sandbox_network_helper.so
 

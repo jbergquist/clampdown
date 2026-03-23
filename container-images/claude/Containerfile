@@ -46,6 +46,7 @@ RUN apk add --no-cache \
     && mkdir -p /usr/local/lib/docker/cli-plugins \
     && ln -s /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 
+ENV SHELL=/bin/bash
 ENV BASH_ENV=/etc/sandbox_command_helper.sh
 ENV LD_PRELOAD=/usr/local/lib/sandbox_network_helper.so
 
