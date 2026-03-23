@@ -10,6 +10,7 @@
  */
 
 #define _GNU_SOURCE
+#include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -20,27 +21,48 @@
 static const char guidance[] =
 	"  podman run --rm -v \"$PWD\":\"$PWD\" -w \"$PWD\" IMAGE COMMAND\n";
 
-static int is_inet_nonloopback(const struct sockaddr *addr)
+static int is_blocked_error(int err)
 {
-	if (addr->sa_family != AF_INET)
-		return 0;
-	uint32_t ip = ntohl(((const struct sockaddr_in *)addr)->sin_addr.s_addr);
-	return (ip >> 24) != 127;
+	return err == ECONNREFUSED || err == ETIMEDOUT || err == ENETUNREACH;
+}
+
+/* Extract printable address and port from a sockaddr. Returns 1 for
+ * non-loopback inet/inet6 addresses, 0 otherwise (loopback or unknown). */
+static int fmt_addr(const struct sockaddr *addr, char *buf, size_t bufsz,
+		    uint16_t *port)
+{
+	if (addr->sa_family == AF_INET) {
+		const struct sockaddr_in *sa = (const struct sockaddr_in *)addr;
+		uint32_t ip = ntohl(sa->sin_addr.s_addr);
+		if ((ip >> 24) == 127)
+			return 0;
+		inet_ntop(AF_INET, &sa->sin_addr, buf, bufsz);
+		*port = ntohs(sa->sin_port);
+		return 1;
+	}
+	if (addr->sa_family == AF_INET6) {
+		const struct sockaddr_in6 *sa6 =
+			(const struct sockaddr_in6 *)addr;
+		if (IN6_IS_ADDR_LOOPBACK(&sa6->sin6_addr))
+			return 0;
+		inet_ntop(AF_INET6, &sa6->sin6_addr, buf, bufsz);
+		*port = ntohs(sa6->sin6_port);
+		return 1;
+	}
+	return 0;
 }
 
 int connect(int fd, const struct sockaddr *addr, socklen_t len)
 {
 	long ret = syscall(SYS_connect, fd, addr, len);
-	if (ret == -1 && (errno == ECONNREFUSED || errno == ETIMEDOUT)
-	    && is_inet_nonloopback(addr)) {
-		const struct sockaddr_in *sa = (const struct sockaddr_in *)addr;
-		uint32_t ip = ntohl(sa->sin_addr.s_addr);
-		fprintf(stderr,
-			"sandbox: connection to %u.%u.%u.%u:%u blocked by firewall."
-			" Route through a container:\n%s",
-			(ip >> 24) & 0xff, (ip >> 16) & 0xff,
-			(ip >> 8) & 0xff, ip & 0xff,
-			ntohs(sa->sin_port), guidance);
+	if (ret == -1 && is_blocked_error(errno)) {
+		char buf[INET6_ADDRSTRLEN];
+		uint16_t port;
+		if (fmt_addr(addr, buf, sizeof(buf), &port))
+			fprintf(stderr,
+				"sandbox: connection to %s:%u blocked by firewall."
+				" Route through a container:\n%s",
+				buf, port, guidance);
 	}
 	return ret;
 }
@@ -51,7 +73,7 @@ int getsockopt(int fd, int level, int optname, void *optval, socklen_t *optlen)
 	if (ret == 0 && level == SOL_SOCKET && optname == SO_ERROR
 	    && optlen && *optlen >= (socklen_t)sizeof(int)) {
 		int err = *(int *)optval;
-		if (err == ECONNREFUSED || err == ETIMEDOUT)
+		if (is_blocked_error(err))
 			fprintf(stderr,
 				"sandbox: connection blocked by firewall."
 				" Route through a container:\n%s", guidance);
