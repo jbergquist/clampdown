@@ -134,13 +134,14 @@ Resolve digest before every run:
 	podman image inspect IMAGE:TAG --format '{{.Digest}}'
 	podman run IMAGE@sha256:<digest> ...
 
-Use official Docker Hub images for language runtimes:
+Use official Docker Hub images for language runtimes (prefer Alpine variants for smaller pulls):
 	C#/F#=mcr.microsoft.com/dotnet/sdk, C/C++=gcc, Clojure=clojure, Dart=dart,
-	Elixir=elixir, Erlang=erlang, Fortran=gcc (gfortran), Go=golang, Groovy=groovy,
-	Haskell=haskell, JS/TS=node, Java/Kotlin=eclipse-temurin, Julia=julia,
-	Nim=nimlang/nim, OCaml=ocaml/opam:alpine, Obj-C=swift, Octave=gnuoctave/octave,
-	PHP=php, Perl=perl, Python=python, R=r-base, Ruby=ruby, Rust=rust,
-	Scala=eclipse-temurin (+ sbt), Swift=swift, git=alpine/git, Lua/Zig=alpine:3.21.
+	Elixir=elixir:alpine, Erlang=erlang, Fortran=gcc (gfortran), Go=golang:alpine,
+	Groovy=groovy, Haskell=haskell, JS/TS=node:alpine, Java/Kotlin=eclipse-temurin,
+	Julia=julia, Nim=nimlang/nim, OCaml=ocaml/opam:alpine, Obj-C=swift,
+	Octave=gnuoctave/octave, PHP=php:alpine, Perl=perl:slim, Python=python:alpine,
+	R=r-base, Ruby=ruby:alpine, Rust=rust, Scala=eclipse-temurin (+ sbt),
+	Swift=swift, git=alpine/git, gh="alpine + github-cli", Lua/Zig=alpine:3.21.
 For build tools (make, strip, ldd, ar, objdump): use gcc.
 
 ## Writable paths
