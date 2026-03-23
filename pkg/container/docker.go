@@ -105,7 +105,7 @@ func (d *Docker) StartSidecar(ctx context.Context, cfg SidecarContainerConfig) e
 
 	args = append(args,
 		"--security-opt", "apparmor=unconfined",
-		"--security-opt", "label=type:container_engine_t",
+		"--security-opt", "label=type:spc_t", // docker does not support container_engine_t
 		"--security-opt", "no-new-privileges",
 		"--security-opt", "seccomp="+cfg.SeccompProfile,
 	)

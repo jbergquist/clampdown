@@ -230,12 +230,6 @@
     },
 
     {
-      "names": ["splice", "tee"],
-      "action": "SCMP_ACT_ERRNO",
-      "errnoRet": 38,
-      "comment": "Dirty Pipe (CVE-2022-0847). ENOSYS so Go io.Copy falls back to userspace read/write. Stricter than default profile (which allows splice/tee)."
-    },
-    {
       "names": ["vmsplice"],
       "action": "SCMP_ACT_ERRNO",
       "errnoRet": 38,
