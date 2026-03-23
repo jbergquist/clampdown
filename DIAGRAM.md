@@ -532,8 +532,8 @@ top of the sidecar profile.
 |------|--------|---------------|
 | read_exec | read, execute | /bin, /sbin, /usr, /lib, /.sandbox |
 | read_only | read | / (entire rootfs) |
-| write_noexec | read, write, create, delete, IoctlDev | /dev, /proc, /tmp, /run, /var |
-| write_exec | read, write, create, delete, execute, IoctlDev | /home, workdir |
+| write_noexec | read, write, create, delete, IoctlDev | /dev, /proc, /run, /var |
+| write_exec | read, write, create, delete, execute, IoctlDev | /home, /tmp, /var/tmp, workdir |
 
 All tiers include Refer (prevents EXDEV). MakeChar/MakeBlock excluded.
 

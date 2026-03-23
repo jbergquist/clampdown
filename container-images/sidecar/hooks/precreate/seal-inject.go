@@ -132,13 +132,14 @@ func derivePolicy(mounts []mount) landlockPolicy {
 		// More specific rules override the ReadOnly on "/".
 		WriteNoExec: []string{
 			"/dev", "/proc",
-			"/tmp", "/var/tmp",
 			"/run",
 			"/var/log", "/var/cache", "/var/lib",
 		},
-		// Home dirs need write+exec: build tools install and run
-		// binaries from ~/.local/bin, ~/.cargo/bin, etc.
-		WriteExec: []string{"/home"},
+		// Home and temp dirs need write+exec: build tools install and
+		// run binaries from ~/.local/bin, ~/.cargo/bin, etc. Compilers
+		// (Go, GCC, Haskell, Nim, R) execute intermediate files from
+		// $TMPDIR which defaults to /tmp.
+		WriteExec: []string{"/home", "/tmp", "/var/tmp"},
 	}
 
 	for _, m := range mounts {

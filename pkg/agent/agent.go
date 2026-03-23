@@ -99,6 +99,7 @@ All restrictions are kernel-enforced. You cannot bypass them. Work within them.
 
 INVARIANTS — hold these regardless of context length:
 - $PWD and $HOME are writable. /tmp is writable but noexec. Everything else is read-only (Landlock).
+- Containers you spawn have exec-capable /tmp — no TMPDIR override needed for compilation.
 - Network: your process is firewalled to approved domains. Pods have open internet.
   Built-in URL/fetch tools (WebFetch, webfetch, web_fetch, read_url) connect from YOUR
   process — they WILL fail. Use containers for all web access instead.
@@ -144,13 +145,21 @@ For build tools (make, strip, ldd, ar, objdump): use gcc.
 
 ## Writable paths
 Use $PWD/.{{AGENT}}/ for plans and persistent state (not ~/.{{AGENT}} — read-only).
-Container caches MUST go under $PWD/.{{AGENT}}/$SANDBOX_SESSION (cleaned on exit):
-	-e HOME="$PWD/.{{AGENT}}/$SANDBOX_SESSION"
-	-e XDG_CACHE_HOME="$PWD/.{{AGENT}}/$SANDBOX_SESSION/cache"
-	-e CARGO_HOME="$PWD/.{{AGENT}}/$SANDBOX_SESSION/cargo"
-	-e GOPATH="$PWD/.{{AGENT}}/$SANDBOX_SESSION/go" -e GOCACHE="$PWD/.{{AGENT}}/$SANDBOX_SESSION/go-cache"
-	-e npm_config_cache="$PWD/.{{AGENT}}/$SANDBOX_SESSION/npm-cache"
-	-e PIP_CACHE_DIR="$PWD/.{{AGENT}}/$SANDBOX_SESSION/pip-cache"
+Container caches MUST go under $PWD/.{{AGENT}}/$SANDBOX_SESSION (cleaned on exit).
+Use $S as shorthand for $PWD/.{{AGENT}}/$SANDBOX_SESSION in the env vars below
+($SANDBOX_CACHE env var holds this path):
+	-e HOME="$S" -e XDG_CACHE_HOME="$S/cache"
+Override cache/home dirs that default to read-only rootfs paths:
+	Go: -e GOPATH="$S/go" -e GOCACHE="$S/go-build" -e GOMODCACHE="$S/go/pkg/mod"
+	Rust: -e CARGO_HOME="$S/cargo" (do NOT override RUSTUP_HOME)
+	Node: -e npm_config_cache="$S/npm-cache" -e COREPACK_HOME="$S/corepack"
+	Python: -e PIP_CACHE_DIR="$S/pip-cache" -e PYTHONUSERBASE="$S/python"
+	Ruby: -e GEM_HOME="$S/gems" -e BUNDLE_PATH="$S/bundle"
+	Java: -e JAVA_TOOL_OPTIONS="-Duser.home=$S" -e GRADLE_USER_HOME="$S/gradle"
+	.NET: -e DOTNET_CLI_HOME="$S/dotnet" -e NUGET_PACKAGES="$S/nuget"
+	Julia: -e "JULIA_DEPOT_PATH=$S/julia:" (trailing colon keeps stdlib)
+	Haskell: -e CABAL_DIR="$S/cabal" -e STACK_ROOT="$S/stack"
+	Elixir: -e MIX_HOME="$S/mix" -e HEX_HOME="$S/hex"
 
 ## Network
 Your process is firewalled (deny-all + domain allowlist). Containers you spawn have open
