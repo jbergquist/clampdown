@@ -677,6 +677,8 @@ func TestSealInject(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEgress(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "firewall.json")
+
 	t.Run("approved_registry_pull", func(t *testing.T) {
 		// docker.io is in policy.json and agent allowlist.
 		out, err := sidecarExec(t, sidecarName,
@@ -700,8 +702,8 @@ func TestEgress(t *testing.T) {
 		// layer allows it. The pull should still fail because policy.json
 		// does not include mcr.microsoft.com (default: reject).
 		ctx := context.Background()
-		err := network.AgentAllow(ctx, rt, sidecarName,
-			[]string{"mcr.microsoft.com"}, "443")
+		err := network.AgentAllow(ctx, rt, sidecarName, statePath,
+			[]string{"mcr.microsoft.com"}, 443)
 		if err != nil {
 			t.Fatalf("add agent allow: %v", err)
 		}
@@ -732,8 +734,8 @@ func TestEgress(t *testing.T) {
 		// = allow, not a private CIDR). Add a PodBlock rule for
 		// example.com:80, then verify the fetch fails.
 		ctx := context.Background()
-		err := network.PodBlock(ctx, rt, sidecarName,
-			[]string{"example.com"}, "80")
+		err := network.PodBlock(ctx, rt, sidecarName, statePath,
+			[]string{"example.com"}, 80)
 		if err != nil {
 			t.Fatalf("add pod block: %v", err)
 		}
