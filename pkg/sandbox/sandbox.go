@@ -424,7 +424,7 @@ func runPreflightChecks(ctx context.Context, rt container.Runtime) error {
 		return nil
 	}
 
-	err = checkLandlock()
+	err = CheckLandlock()
 	if err != nil {
 		return err
 	}
@@ -434,22 +434,14 @@ func runPreflightChecks(ctx context.Context, rt container.Runtime) error {
 	return nil
 }
 
-// checkLandlock verifies Landlock LSM is available on the host kernel.
+// CheckLandlock verifies Landlock LSM is available on the host kernel.
 //
-// Hard-fails if Landlock is confirmed absent (file readable, not in list).
-// Warns if /sys/kernel/security/lsm is unreadable (can't confirm — let
-// seal do the final enforcement inside the container).
+// Hard-fails if Landlock is absent or cannot be confirmed.
 // Warns if kernel < 6.12 (Landlock present but lacks IPC + TCP scoping).
-func checkLandlock() error {
+func CheckLandlock() error {
 	lsm, readErr := os.ReadFile("/sys/kernel/security/lsm")
 	if readErr != nil {
-		// Can't read LSM list (unusual — maybe container-in-container).
-		// Warn and continue; seal will hard-fail inside if Landlock is truly absent.
-		fmt.Fprintf(os.Stderr, "\n"+
-			"  ⚠️  Cannot read /sys/kernel/security/lsm.\n"+
-			"  Landlock availability unknown. If Landlock is missing,\n"+
-			"  the sandbox will fail when the agent starts.\n\n")
-		return nil //nolint:nilerr // intentional: warn and let seal enforce inside container
+		return fmt.Errorf("cannot read /sys/kernel/security/lsm: %w", readErr)
 	}
 
 	modules := strings.Split(strings.TrimSpace(string(lsm)), ",")

@@ -40,6 +40,7 @@ var (
 	integGHDir      string // host-side gh config dir
 	integSocketPath string // host-side Unix socket for forwarding test
 	integSocketLn   net.Listener
+	isNative        bool // true if runtime runs natively (not in a VM)
 	innerPodman     = "/usr/local/bin/podman"
 	innerEnv        = map[string]string{"CONTAINER_HOST": container.SidecarAPI}
 )
@@ -138,11 +139,31 @@ func buildSidecarConfig(
 
 func TestMain(m *testing.M) {
 	var err error
-	rt, err = container.Detect()
+	name := filepath.Base(os.Getenv("CTR"))
+	if name != "" && name != "." {
+		rt, err = container.ForName(name)
+	} else {
+		rt, err = container.Detect()
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skip: %v\n", err)
 		os.Exit(0)
 	}
+
+	// Preflight: runtime must run natively (not in a VM) for kernel features.
+	isNative, err = rt.IsNative(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "skip: %v\n", err)
+		os.Exit(0)
+	}
+
+	// Preflight: Landlock must be available — the sidecar hard-fails without it.
+	err = sandbox.CheckLandlock()
+	if err != nil && isNative {
+		fmt.Fprintf(os.Stderr, "skip: %v\n", err)
+		os.Exit(0)
+	}
+
 	os.Exit(runTests(m))
 }
 
@@ -171,6 +192,10 @@ func runTests(m *testing.M) (code int) {
 	cleanStaleIntegContainers(ctx)
 
 	var dataDir string
+
+	// Use $HOME/.cache for temp dirs. On macOS with colima, only ~/ is
+	// shared into the VM by default. /tmp and /var/folders are not.
+	testBase := filepath.Join(os.Getenv("HOME"), ".cache", "clampdown-test")
 
 	defer func() {
 		var containers []string
@@ -205,16 +230,24 @@ func runTests(m *testing.M) (code int) {
 		if dataDir != "" {
 			_ = os.RemoveAll(dataDir)
 		}
+		// Remove the test base dir if empty (all children removed above).
+		_ = os.Remove(testBase)
 	}()
 
 	var err error
 
-	workdir, err = os.MkdirTemp("", "clampdown-integ-*")
+	err = os.MkdirAll(testBase, 0o755)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create test base: %v\n", err)
+		return 1
+	}
+
+	workdir, err = os.MkdirTemp(testBase, "integ-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mkdirtemp: %v\n", err)
 		return 1
 	}
-	workdirDigest, err = os.MkdirTemp("", "clampdown-integ-digest-*")
+	workdirDigest, err = os.MkdirTemp(testBase, "clampdown-integ-digest-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mkdirtemp: %v\n", err)
 		return 1
@@ -233,7 +266,7 @@ func runTests(m *testing.M) (code int) {
 		return 1
 	}
 
-	dataDir, err = os.MkdirTemp("", "clampdown-integ-data-*")
+	dataDir, err = os.MkdirTemp(testBase, "clampdown-integ-data-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mkdirtemp: %v\n", err)
 		return 1
@@ -249,7 +282,7 @@ func runTests(m *testing.M) (code int) {
 	uid := strconv.Itoa(os.Getuid())
 	gid := strconv.Itoa(os.Getgid())
 
-	workdirInteg, err = os.MkdirTemp("", "clampdown-integ-integ-*")
+	workdirInteg, err = os.MkdirTemp(testBase, "clampdown-integ-integ-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mkdirtemp: %v\n", err)
 		return 1
@@ -264,7 +297,7 @@ func runTests(m *testing.M) (code int) {
 	// Create integration test fixtures on the host. These get bind-mounted
 	// into the integration sidecar at /run/credentials/* and should be
 	// forwarded by seal-inject into nested containers.
-	integGitconfig, err = os.MkdirTemp("", "integ-gitconfig-*")
+	integGitconfig, err = os.MkdirTemp(testBase, "integ-gitconfig-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create gitconfig dir: %v\n", err)
 		return 1
@@ -276,7 +309,7 @@ func runTests(m *testing.M) (code int) {
 		return 1
 	}
 
-	integGHDir, err = os.MkdirTemp("", "integ-gh-*")
+	integGHDir, err = os.MkdirTemp(testBase, "integ-gh-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create gh dir: %v\n", err)
 		return 1
@@ -294,7 +327,7 @@ func runTests(m *testing.M) (code int) {
 	// Create a Unix socket listener on the host. The socket is mounted into
 	// the integration sidecar and forwarded into nested containers by seal-inject.
 	// The listener echoes "pong" on every connection, proving end-to-end data flow.
-	socketDir, err := os.MkdirTemp("", "integ-socket-*")
+	socketDir, err := os.MkdirTemp(testBase, "integ-socket-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create socket dir: %v\n", err)
 		return 1
@@ -344,10 +377,17 @@ func runTests(m *testing.M) (code int) {
 		"SANDBOX_WORKDIR":        workdirInteg,
 	}
 	cfgInteg := buildSidecarConfig(integSidecar, sidecarSeccomp, pathsInteg, workdirInteg, integEnv)
+
 	cfgInteg.Mounts = []container.MountSpec{
 		{Source: gitconfigFile, Dest: "/run/credentials/gitconfig", RO: true, Type: container.Bind},
 		{Source: integGHDir, Dest: "/run/credentials/gh", RO: true, Type: container.Bind},
-		{Source: integSocketPath, Dest: "/run/credentials/ssh-agent.sock", RO: true, Type: container.Bind},
+	}
+	// SSH socket forwarding only works on native runtimes — Unix sockets
+	// cannot cross the VM boundary (virtiofs/9p).
+	if isNative {
+		cfgInteg.Mounts = append(cfgInteg.Mounts, container.MountSpec{
+			Source: integSocketPath, Dest: "/run/credentials/ssh-agent.sock", RO: true, Type: container.Bind,
+		})
 	}
 
 	err = rt.StartSidecar(ctx, cfg)
@@ -680,9 +720,9 @@ func TestEgress(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "firewall.json")
 
 	t.Run("approved_registry_pull", func(t *testing.T) {
-		// docker.io is in policy.json and agent allowlist.
+		// quay.io is in policy.json and agent allowlist.
 		out, err := sidecarExec(t, sidecarName,
-			innerPull("docker.io/alpine:3.21"))
+			innerPull("quay.io/fedora/fedora:latest"))
 		requireSuccess(t, out, err)
 	})
 
@@ -807,6 +847,9 @@ func TestCredentialForwarding(t *testing.T) {
 	})
 
 	t.Run("ssh_auth_sock_env", func(t *testing.T) {
+		if !isNative {
+			t.Skip("SSH agent forwarding not supported on VM-based runtimes")
+		}
 		t.Parallel()
 		// SSH_AUTH_SOCK should be set to /run/ssh-agent.sock.
 		out, err := sidecarExec(t, integSidecar,
@@ -819,6 +862,9 @@ func TestCredentialForwarding(t *testing.T) {
 	})
 
 	t.Run("ssh_socket_is_socket", func(t *testing.T) {
+		if !isNative {
+			t.Skip("SSH agent forwarding not supported on VM-based runtimes")
+		}
 		t.Parallel()
 		// The forwarded path must be an actual Unix socket, not a file.
 		out, err := sidecarExec(t, integSidecar,
@@ -827,6 +873,9 @@ func TestCredentialForwarding(t *testing.T) {
 	})
 
 	t.Run("ssh_socket_data_flows", func(t *testing.T) {
+		if !isNative {
+			t.Skip("SSH agent forwarding not supported on VM-based runtimes")
+		}
 		t.Parallel()
 		// Connect to the forwarded socket and read the "pong" response
 		// from the host-side listener. Proves end-to-end data flow
@@ -863,10 +912,20 @@ func TestCredentialForwarding(t *testing.T) {
 
 func TestSecurityAudit(t *testing.T) {
 	t.Run("cdk", func(t *testing.T) {
+		// Detect architecture for the correct CDK binary.
+		archOut, archErr := sidecarExec(t, sidecarName, innerRun(nil, "uname", "-m"))
+		if archErr != nil {
+			t.Fatalf("detect arch: %v", archErr)
+		}
+		cdkArch := "amd64"
+		if strings.Contains(string(archOut), "aarch64") {
+			cdkArch = "arm64"
+		}
+		cdkURL := "https://github.com/cdk-team/CDK/releases/download/v1.5.3/cdk_linux_" + cdkArch
 		cmd := []string{
 			innerPodman, "run", "--rm", "--tmpfs", "/home/audit",
 			alpineImage, "sh", "-c",
-			"wget -q -O /home/audit/cdk https://github.com/cdk-team/CDK/releases/download/v1.5.3/cdk_linux_amd64 && " +
+			"wget -q -O /home/audit/cdk " + cdkURL + " && " +
 				"chmod +x /home/audit/cdk && /home/audit/cdk evaluate --full 2>&1",
 		}
 		out, err := sidecarExecTimeout(t, sidecarName, cmd, 120*time.Second)
