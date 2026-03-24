@@ -166,9 +166,9 @@ func BuildAgentFirewall(
 // BuildPodFirewall creates the full pod FORWARD chain structure via
 // iptables-restore. Applied atomically in 2 calls (IPv4 + IPv6).
 //
-// allow mode: established -> loopback -> POD_ALLOW -> private CIDRs DROP ->
+// allow mode: established -> loopback -> POD_ALLOW -> DNS ACCEPT ->
 //
-//	POD_BLOCK -> ACCEPT
+//	private CIDRs DROP -> POD_BLOCK -> ACCEPT
 //
 // deny mode: established -> loopback -> DNS ACCEPT -> POD_ALLOW -> DROP.
 func BuildPodFirewall(ctx context.Context, rt container.Runtime, sidecar string, policy string) error {
@@ -193,6 +193,12 @@ func BuildPodFirewall(ctx context.Context, rt container.Runtime, sidecar string,
 
 		if policy == "allow" {
 			fmt.Fprintf(&buf, "-A FORWARD -j %s\n", chainPodAllow)
+			// Allow DNS before private CIDR block: the resolver may be on
+			// a private IP (127.0.0.53 systemd-resolved, 192.168.x.x bridge,
+			// 169.254.1.1 pasta, 192.168.127.1 gvproxy).
+			buf.WriteString(
+				"-A FORWARD -p udp --dport 53 -j ACCEPT\n" +
+					"-A FORWARD -p tcp --dport 53 -j ACCEPT\n")
 			for _, cidr := range privRanges {
 				fmt.Fprintf(&buf, "-A FORWARD ! -o lo -d %s -j DROP\n", cidr)
 			}
@@ -207,6 +213,11 @@ func BuildPodFirewall(ctx context.Context, rt container.Runtime, sidecar string,
 				chainPodAllow)
 		}
 		buf.WriteString("COMMIT\n")
+
+		// Ensure NAT masquerade for forwarded traffic.
+		buf.WriteString("*nat\n" +
+			"-A POSTROUTING ! -o lo -j MASQUERADE\n" +
+			"COMMIT\n")
 
 		out, err := rt.ExecStdin(ctx, sidecar, []string{restoreBin, "--noflush"}, []byte(buf.String()))
 		if err != nil {
