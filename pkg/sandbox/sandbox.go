@@ -239,6 +239,16 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 	}()
 
 	sidecarCfg := sidecarConfig(sidecarName, pid, opts, p, sidecarSeccomp, ag, masked)
+
+	// SSH agent forwarding requires a native runtime — Unix sockets
+	// cannot cross the VM boundary (virtiofs/9p don't support them).
+	if opts.SSH {
+		native, _ := rt.IsNative(runCtx)
+		if !native {
+			slog.Warn("--ssh: SSH agent forwarding is not supported on VM-based runtimes (colima, podman machine). Skipping.")
+			opts.SSH = false
+		}
+	}
 	sidecarCfg.Mounts = CredentialMounts(opts)
 	sidecarCfg.MaskedPaths = sidecarMasks
 
