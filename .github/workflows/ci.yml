@@ -30,6 +30,25 @@ jobs:
           go-version-file: go.mod
       - run: make test
 
+  integration-test:
+    name: Integration (${{ matrix.runtime }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [podman, docker]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+      - name: Install podman
+        if: matrix.runtime == 'podman'
+        run: sudo apt-get update && sudo apt-get install -y podman
+      - name: Run integration tests
+        run: make test-integration CTR=${{ matrix.runtime }}
+        timeout-minutes: 15
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

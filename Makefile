@@ -63,9 +63,9 @@ INTEG_IMAGES := alpine python:alpine
 
 test-integration: .sidecar.stamp
 	@for img in $(INTEG_IMAGES); do \
-		$(CTR) image exists $$img 2>/dev/null || $(CTR) pull $$img; \
+		$(CTR) image inspect $$img >/dev/null 2>&1 || $(CTR) pull $$img; \
 		done
-	go test -tags integration -count=1 -timeout 600s -v ./pkg/sandbox/
+	CTR=$(CTR) go test -tags integration -count=1 -timeout 600s -v ./pkg/sandbox/
 
 # --- Go binaries (host builds, CGO_ENABLED=0) ---
 
