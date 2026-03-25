@@ -245,7 +245,8 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 	if opts.SSH {
 		native, _ := rt.IsNative(runCtx)
 		if !native {
-			slog.Warn("--ssh: SSH agent forwarding is not supported on VM-based runtimes (colima, podman machine). Skipping.")
+			slog.Warn("--ssh: SSH agent forwarding is not supported" +
+				"on VM-based runtimes (colima, podman machine). Skipping.")
 			opts.SSH = false
 		}
 	}
