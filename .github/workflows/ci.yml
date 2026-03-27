@@ -30,6 +30,7 @@ jobs:
           go-version-file: go.mod
       - run: make test
 
+
   integration-test:
     name: Integration (${{ matrix.runtime }})
     runs-on: ubuntu-latest
@@ -45,6 +46,19 @@ jobs:
       - name: Install podman
         if: matrix.runtime == 'podman'
         run: sudo apt-get update && sudo apt-get install -y podman
+      - name: Log in to Docker Hub (podman)
+        if: matrix.runtime == 'podman' && env.DOCKERHUB_USERNAME != ''
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: podman login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }} docker.io
+      - name: Log in to Docker Hub (docker)
+        if: matrix.runtime == 'docker' && env.DOCKERHUB_USERNAME != ''
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Run integration tests
         run: make test-integration CTR=${{ matrix.runtime }}
         timeout-minutes: 15
