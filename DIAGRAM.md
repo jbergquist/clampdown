@@ -43,13 +43,24 @@
 │  │    -- needed by podman/crun for container management.            │    │
 │  │                                                                  │    │
 │  │  Seccomp-notif supervisor (entrypoint filter, on top of above):  │    │
-│  │    Intercepts 11 syscalls via SECCOMP_RET_USER_NOTIF:            │    │
+│  │    Intercepts 20 syscalls via SECCOMP_RET_USER_NOTIF:            │    │
 │  │    mount, umount2, mount_setattr, move_mount, open_tree,         │    │
-│  │    fsopen, fsconfig, fsmount, ptrace, process_vm_readv/writev.   │    │
+│  │    fsopen, fsconfig, fsmount, ptrace, process_vm_readv/writev,   │    │
+│  │    execve, execveat, openat, unlinkat, symlinkat, linkat,        │    │
+│  │    renameat2, setsockopt, socket.                                │    │
 │  │    Policy: BLOCK mount/umount targeting protected paths,         │    │
 │  │    BLOCK non-recursive bind stripping /dev/null sub-mounts,      │    │
 │  │    BLOCK procfs mount from sidecar PID namespace,                │    │
-│  │    BLOCK ptrace/process_vm_* targeting PID 1. ALLOW otherwise.   │    │
+│  │    BLOCK ptrace/process_vm_* targeting PID 1,                    │    │
+│  │    BLOCK execve/execveat not in SHA-256 startup allowlist        │    │
+│  │      (sidecar PID NS only; nested containers skip),              │    │
+│  │    BLOCK openat of /proc/1/* sensitive paths from sidecar PID NS,│    │
+│  │    BLOCK unlinkat/symlinkat/linkat/renameat2 on protected paths, │    │
+│  │    BLOCK setsockopt(IPT_SO_SET_REPLACE) except                   │    │
+│  │      xtables-nft-multi spawned by netavark,                      │    │
+│  │    BLOCK socket(AF_NETLINK, NETLINK_NETFILTER) except            │    │
+│  │      xtables-nft-multi spawned by netavark.                      │    │
+│  │    ALLOW otherwise.                                              │    │
 │  │    Inherited by all children (podman, crun, nested containers).  │    │
 │  │    For agent/nested: workload profile returns ERRNO for mount    │    │
 │  │    (stricter than USER_NOTIF), so supervisor only handles        │    │
@@ -270,11 +281,12 @@ The sidecar starts first in detached mode. Its entrypoint hardens
 /proc/sys, bootstraps cgroup v2, builds the iptables firewall, writes
 the sandbox identity files (UID/GID, bind-mounted read-only), discovers
 protected paths from /proc/self/mountinfo, hardens PID 1
-(PR_SET_DUMPABLE=0, /proc/1/mem masked with /dev/null), installs a
-seccomp-notif filter that intercepts mount/umount/ptrace operations,
-and starts the supervisor goroutine. The entrypoint then starts
-podman system service as a child process (not exec -- the supervisor
-must remain as PID 1 to handle notifications).
+(PR_SET_DUMPABLE=0, /proc/1/mem masked with /dev/null), builds the
+exec allowlist (SHA-256 hashes of every rootfs executable), installs
+a seccomp-notif filter that intercepts 20 syscalls, and starts the
+supervisor goroutine. The entrypoint then starts podman system service
+as a child process (not exec -- the supervisor must remain as PID 1 to
+handle notifications).
 
 Once the sidecar's podman API responds, the launcher checks whether an
 API key is available (from the host environment or .clampdownrc). If a
@@ -329,28 +341,28 @@ Landlock requires kernel 6.2+ (ABI V3). Features from V4-V7 degrade
 gracefully via BestEffort. Landlock cannot be applied to the sidecar
 because mount() internally triggers Landlock path hooks (EPERM).
 
-### Sidecar mount supervisor
+### Sidecar supervisor
 
 The sidecar cannot use Landlock (mount() triggers Landlock path hooks
-internally -> EPERM). This left mount operations in the sidecar
-unsupervised -- a gap in defense-in-depth. The seccomp-notif supervisor
-closes this gap.
+internally -> EPERM). The seccomp-notif supervisor compensates by
+intercepting 20 syscalls at the kernel level, covering mount
+operations, exec verification, protected-path file operations,
+process targeting, and firewall modification.
 
 The entrypoint installs a seccomp BPF filter using
-`SECCOMP_RET_USER_NOTIF` for 11 syscalls (mount, umount2,
-mount_setattr, move_mount, open_tree, fsopen, fsconfig, fsmount,
-ptrace, process_vm_readv, process_vm_writev). When any sidecar-level
+`SECCOMP_RET_USER_NOTIF` for 20 syscalls. When any sidecar-level
 process invokes these, the kernel suspends the caller and delivers
-the notification to the supervisor goroutine, which reads the
-caller's memory to extract paths, validates them against a set of
-protected paths, and either continues the syscall or returns EPERM.
+the notification to the supervisor goroutine, which evaluates the
+call against policy and either continues the syscall or returns an
+error.
 
 Protected paths are discovered dynamically from `/proc/self/mountinfo`
 at startup: all read-only bind mounts under the workdir (protected
 files like `.git/hooks`), all `/dev/null` mounts (masked files like
 `.env`), plus `/proc/sys` and `/proc/1` unconditionally.
 
-**What the supervisor blocks:**
+**Mount supervision** (mount, umount2, mount_setattr, move_mount,
+open_tree, fsopen, fsconfig, fsmount):
 - `umount2` on any protected or masked path
 - `mount` targeting a protected path (prevents overlay, remount, tmpfs over it)
 - Non-recursive `mount(MS_BIND)` where the source is the workdir or an
@@ -361,23 +373,58 @@ files like `.git/hooks`), all `/dev/null` mounts (masked files like
 - Non-recursive `open_tree(OPEN_TREE_CLONE)` of the workdir or ancestors
   (same sub-mount stripping attack as non-recursive bind)
 - `fsopen("proc")` from the sidecar's PID namespace
+
+**Exec allowlist** (execve, execveat):
+At startup, the supervisor walks the rootfs (same device only, skipping
+mount points) and SHA-256 hashes every executable file, storing the
+hash alongside stat metadata (dev, ino, size, mtime) in an immutable
+map. On execve/execveat from sidecar PID NS processes: the path is
+resolved (symlinks, cwd, dirfd, AT_EMPTY_PATH for execveat), then
+verified against the allowlist via a fast path (stat metadata match)
+or slow path (re-hash on metadata mismatch). Binaries not in the
+startup snapshot are blocked with EACCES. Nested container processes
+(different PID NS) skip the check entirely -- their exec is governed
+by Landlock and the workload seccomp profile.
+
+**Protected-path operations** (openat, unlinkat, symlinkat, linkat,
+renameat2):
+- `openat` of `/proc/1/{mem,environ,maps,root,cwd,exe,stack,syscall,
+  io,auxv,pagemap}` from sidecar PID NS (defense-in-depth behind the
+  `/dev/null` mask on `/proc/1/mem` and the mount supervisor blocking
+  unmounts)
+- `unlinkat` / `symlinkat` / `linkat` / `renameat2` targeting any
+  protected or masked path (prevents deletion, replacement, or renaming
+  of files the mount supervisor protects)
+
+**PID 1 protection** (ptrace, process_vm_readv, process_vm_writev):
 - `ptrace` / `process_vm_readv` / `process_vm_writev` targeting PID 1
+
+**Firewall lock** (setsockopt, socket):
+- `setsockopt(IPT_SO_SET_REPLACE)` blocked unless the caller is
+  `/usr/sbin/xtables-nft-multi` with parent `/usr/local/lib/podman/netavark`.
+  This is the only legitimate path for netfilter modification inside
+  the sidecar (netavark configures per-container bridge rules).
+- `socket(AF_NETLINK, NETLINK_NETFILTER)` same policy -- blocks
+  creation of netfilter sockets except from the netavark->xtables chain.
+- Integer args only (level, optname, domain, protocol) -- zero TOCTOU.
+- Key property: `podman exec` from the host enters via `setns()`, not
+  `fork()`, so it does NOT inherit the seccomp-notif filter. Legitimate
+  firewall changes from the launcher (`clampdown network`) are exempt.
+  Only children of PID 1 (spawned by podman inside the sidecar) inherit
+  the filter and are subject to the firewall lock.
 
 **Filter inheritance:** The BPF filter is inherited by all children
 (kernel guarantee). For agent and nested containers, the workload
-seccomp profile returns ERRNO for mount/umount (stricter than
+seccomp profile returns ERRNO for mount/umount/execveat (stricter than
 USER_NOTIF -- the kernel picks the strictest). So the supervisor
 effectively only handles sidecar-level processes (podman, crun) that
-legitimately need mount() for container operations.
+legitimately need these syscalls for container operations.
 
 **TOCTOU mitigation:** After reading paths from the caller's memory,
 the supervisor calls `SECCOMP_IOCTL_NOTIF_ID_VALID` to verify the
 notification is still active (the caller hasn't been killed/replaced).
-
-**Fallback:** If seccomp-notif installation fails (kernel too old or
-seccomp flags unsupported), the entrypoint falls back to exec'ing
-podman directly. The OCI hooks and workload seccomp profile still
-provide protection; only the sidecar-level mount supervision is lost.
+The firewall lock handlers use integer args only (no pointer reads),
+eliminating TOCTOU entirely for those checks.
 
 ### Network policy
 
@@ -573,7 +620,7 @@ Base images pinned by SHA256 digest.
 
 | Image | File | Notes |
 |-------|------|-------|
-| Sidecar | /entrypoint | Go, static (seccomp-notif supervisor) |
+| Sidecar | /entrypoint | Go, static (seccomp-notif supervisor, 20 syscalls) |
 | Sidecar | /sandbox-seal | Go, static (go-landlock, x/sys, psx) |
 | Sidecar | /rename_exdev_shim.so | C, musl -nostdlib |
 | Sidecar | seal-inject, security-policy | Go, static, stdlib only |

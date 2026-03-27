@@ -59,6 +59,10 @@ func reapZombies() {
 //   - open_tree -- block non-recursive clones that strip sub-mounts
 //   - fsopen, fsconfig, fsmount -- block new mount API procfs bypass
 //   - ptrace, process_vm_readv, process_vm_writev -- protect PID 1
+//   - execve, execveat -- hash-verified exec allowlist
+//   - openat -- block /proc/1/* opens from sidecar PID NS
+//   - unlinkat, symlinkat, linkat, renameat2 -- protect RO/masked paths
+//   - setsockopt, socket -- firewall lock (netfilter modification)
 var interceptedSyscalls = []uint32{
 	unix.SYS_UMOUNT2,
 	unix.SYS_MOUNT,
@@ -71,6 +75,15 @@ var interceptedSyscalls = []uint32{
 	unix.SYS_PTRACE,
 	unix.SYS_PROCESS_VM_READV,
 	unix.SYS_PROCESS_VM_WRITEV,
+	unix.SYS_EXECVE,
+	unix.SYS_EXECVEAT,
+	unix.SYS_OPENAT,
+	unix.SYS_UNLINKAT,
+	unix.SYS_SYMLINKAT,
+	unix.SYS_LINKAT,
+	unix.SYS_RENAMEAT2,
+	unix.SYS_SETSOCKOPT,
+	unix.SYS_SOCKET,
 }
 
 func main() {
@@ -131,6 +144,11 @@ func main() {
 	fmt.Fprintf(os.Stderr, "clampdown: %s seccomp-notif: protecting %d mount points\n",
 		time.Now().UTC().Format(time.RFC3339), len(protected))
 
+	// Build the exec allowlist BEFORE installing the filter. The walk
+	// calls stat/open on files, which should not be intercepted.
+	allowlist, count := buildExecAllowlist()
+	logExecAllowlist(count)
+
 	// Harden PID 1 BEFORE installing the filter. The bind mount on
 	// /proc/1/mem must happen without interception -- once the filter
 	// is active, the supervisor would block it (/proc/1 is protected).
@@ -146,14 +164,10 @@ func main() {
 
 	if notifFD < 0 {
 		runtime.UnlockOSThread()
-		fmt.Fprintln(os.Stderr, "seccomp-notif: falling back to exec (no supervisor)")
-		execErr := unix.Exec(os.Args[1], os.Args[1:], os.Environ())
-		if execErr != nil {
-			fatalf("exec %s: %v", os.Args[1], execErr)
-		}
+		fatalf("seccomp-notif: failed to exec (no supervisor)")
 	}
 
-	go runSupervisor(notifFD, protected, workdir)
+	go runSupervisor(notifFD, protected, workdir, allowlist)
 
 	cmd := exec.Command(os.Args[1], os.Args[2:]...)
 	cmd.Stdin = os.Stdin

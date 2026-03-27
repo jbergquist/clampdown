@@ -3,6 +3,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"testing"
@@ -258,5 +259,195 @@ func TestIsSubPath(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("isSubPath(%q, %q) = %v, want %v", tt.base, tt.path, got, tt.want)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Exec allowlist tests
+// ---------------------------------------------------------------------------
+
+func TestHashFile(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "test")
+	content := []byte("hello world\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := hashFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := sha256.Sum256(content)
+	if got != want {
+		t.Errorf("hash mismatch: got %x, want %x", got, want)
+	}
+}
+
+func TestHashFile_Missing(t *testing.T) {
+	_, err := hashFile("/nonexistent/file")
+	if err == nil {
+		t.Error("expected error for missing file")
+	}
+}
+
+func TestWalkAndHash_Discovery(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "mybin"), []byte("#!/bin/sh\necho hi"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "data.txt"), []byte("just data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	subDir := filepath.Join(tmp, "sub")
+	if err := os.Mkdir(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "tool"), []byte("#!/bin/sh\ntool"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var rootSt unix.Stat_t
+	if err := unix.Stat(tmp, &rootSt); err != nil {
+		t.Fatal(err)
+	}
+	entries, count := walkAndHash(tmp, rootSt.Dev)
+	if count != 2 {
+		t.Errorf("expected 2 executables, got %d", count)
+	}
+	if _, ok := entries[filepath.Join(tmp, "mybin")]; !ok {
+		t.Error("expected mybin in allowlist")
+	}
+	if _, ok := entries[filepath.Join(subDir, "tool")]; !ok {
+		t.Error("expected sub/tool in allowlist")
+	}
+	if _, ok := entries[filepath.Join(tmp, "data.txt")]; ok {
+		t.Error("non-executable data.txt should not be in allowlist")
+	}
+}
+
+func TestWalkAndHash_ResolvesSymlinks(t *testing.T) {
+	tmp := t.TempDir()
+	realBin := filepath.Join(tmp, "real-bin")
+	if err := os.WriteFile(realBin, []byte("binary content"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realBin, filepath.Join(tmp, "link-bin")); err != nil {
+		t.Fatal(err)
+	}
+
+	var rootSt unix.Stat_t
+	if err := unix.Stat(tmp, &rootSt); err != nil {
+		t.Fatal(err)
+	}
+	entries, count := walkAndHash(tmp, rootSt.Dev)
+	if count != 1 {
+		t.Errorf("expected 1 unique executable (resolved), got %d", count)
+	}
+	if _, ok := entries[realBin]; !ok {
+		t.Error("expected real binary path in allowlist")
+	}
+}
+
+func TestExecAllowlistCheck_FastPath(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "bin")
+	content := []byte("fast-path binary")
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var st unix.Stat_t
+	if err := unix.Stat(path, &st); err != nil {
+		t.Fatal(err)
+	}
+	al := &execAllowlist{entries: map[string]execEntry{
+		path: {Hash: sha256.Sum256(content), Dev: st.Dev, Ino: st.Ino, Size: st.Size, Mtim: st.Mtim},
+	}}
+	if !al.check(path) {
+		t.Error("expected allowlist check to pass (fast path)")
+	}
+}
+
+func TestExecAllowlistCheck_SlowPath(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "bin")
+	content := []byte("slow-path binary")
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	al := &execAllowlist{entries: map[string]execEntry{
+		path: {Hash: sha256.Sum256(content), Size: int64(len(content))},
+	}}
+	if !al.check(path) {
+		t.Error("expected allowlist check to pass (slow path, same hash)")
+	}
+}
+
+func TestExecAllowlistCheck_Modified(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "bin")
+	if err := os.WriteFile(path, []byte("original"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	al := &execAllowlist{entries: map[string]execEntry{
+		path: {Hash: sha256.Sum256([]byte("original"))},
+	}}
+	if err := os.WriteFile(path, []byte("tampered"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if al.check(path) {
+		t.Error("expected allowlist check to fail (content modified)")
+	}
+}
+
+func TestExecAllowlistCheck_Missing(t *testing.T) {
+	al := &execAllowlist{entries: map[string]execEntry{
+		"/nonexistent": {Hash: [32]byte{1}},
+	}}
+	if al.check("/nonexistent") {
+		t.Error("expected check to fail for missing file")
+	}
+}
+
+func TestExecAllowlistCheck_NotInList(t *testing.T) {
+	al := &execAllowlist{entries: map[string]execEntry{}}
+	if al.check("/usr/bin/something") {
+		t.Error("expected check to fail for path not in allowlist")
+	}
+}
+
+func TestResolveExecPath_Absolute(t *testing.T) {
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "mybin")
+	if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := resolveExecPath(bin, uint32(os.Getpid()))
+	if got != bin {
+		t.Errorf("resolveExecPath(%q) = %q, want %q", bin, got, bin)
+	}
+}
+
+func TestResolveExecPath_Empty(t *testing.T) {
+	got := resolveExecPath("", uint32(os.Getpid()))
+	if got != "" {
+		t.Errorf("resolveExecPath(\"\") = %q, want \"\"", got)
+	}
+}
+
+func TestReadPPID(t *testing.T) {
+	ppid := readPPID(uint32(os.Getpid()))
+	if ppid == 0 {
+		t.Error("expected non-zero parent PID for current process")
+	}
+	// Our parent should exist.
+	if exePath(ppid) == "" {
+		t.Error("expected parent to have a valid exe path")
+	}
+}
+
+func TestReadPPID_Missing(t *testing.T) {
+	ppid := readPPID(99999999)
+	if ppid != 0 {
+		t.Errorf("expected 0 for nonexistent PID, got %d", ppid)
 	}
 }

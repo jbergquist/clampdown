@@ -1,0 +1,622 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+// All seccomp-notif handler functions. Each handles one or more syscall
+// numbers dispatched by the supervisor loop in supervisor.go.
+
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+
+	"golang.org/x/sys/unix"
+)
+
+// IPT_SO_SET_REPLACE is the setsockopt optname for replacing iptables
+// rules. Not exported by golang.org/x/sys/unix. Same value for IPv4
+// (IPT_SO_SET_REPLACE) and IPv6 (IP6T_SO_SET_REPLACE).
+const iptSOSetReplace = 64
+
+// proc1Sensitive lists /proc/1 sub-paths that must never be opened from
+// sidecar processes. Defense-in-depth behind the /dev/null mask on
+// /proc/1/mem and the mount supervisor blocking unmounts.
+var proc1Sensitive = []string{
+	"/proc/1/mem",
+	"/proc/1/environ",
+	"/proc/1/maps",
+	"/proc/1/root",
+	"/proc/1/cwd",
+	"/proc/1/exe",
+	"/proc/1/stack",
+	"/proc/1/syscall",
+	"/proc/1/io",
+	"/proc/1/auxv",
+	"/proc/1/pagemap",
+}
+
+// ---------------------------------------------------------------------------
+// Mount-family handlers
+// ---------------------------------------------------------------------------
+
+// handleUmount2 blocks umount2 on protected paths.
+// umount2(target, flags): arg0 = target path pointer.
+func handleUmount2(notif *seccompNotif, resp *seccompNotifResp, pid uint32, protected map[string]bool, notifFD int) {
+	target, err := readStringFromPID(pid, notif.Data.Args[0])
+	if err != nil {
+		logf("WARNING: umount2 cannot read path pid=%d: %v (allowing)", pid, err)
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+	target = resolvePath(target, pid)
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	if isProtected(target, protected) {
+		resp.Error = -int32(unix.EPERM)
+		logf("BLOCKED umount2 path=%s pid=%d bin=%s", target, pid, exePath(pid))
+	} else {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+	}
+}
+
+// handleMount applies policy to all mount() calls.
+// mount(source, target, fstype, flags, data):
+//
+//	arg0 = source, arg1 = target, arg2 = fstype, arg3 = flags.
+//
+// Policy:
+//   - Target is a protected/masked path -> BLOCK (prevents overlay/remount)
+//   - MS_BIND without MS_REC and source contains the workdir -> BLOCK
+//     (prevents non-recursive bind that strips /dev/null sub-mounts)
+//   - Procfs mount from sidecar PID namespace -> BLOCK
+//     (prevents mounting new procfs to access /proc/1/mem)
+//   - Otherwise -> ALLOW
+func handleMount(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	pid uint32,
+	protected map[string]bool,
+	workdir, myPIDNS string,
+	notifFD int,
+) {
+	target, err := readStringFromPID(pid, notif.Data.Args[1])
+	if err != nil {
+		logf("WARNING: mount cannot read target pid=%d: %v (allowing)", pid, err)
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+	target = resolvePath(target, pid)
+
+	flags := notif.Data.Args[3]
+
+	// For bind mounts, also read the source.
+	var source string
+	if flags&unix.MS_BIND != 0 {
+		source, err = readStringFromPID(pid, notif.Data.Args[0])
+		if err != nil {
+			source = ""
+		} else {
+			source = resolvePath(source, pid)
+		}
+	}
+
+	// Read filesystem type for procfs check (arg2, may be NULL for bind/remount).
+	var fstype string
+	if notif.Data.Args[2] != 0 {
+		fstype, _ = readStringFromPID(pid, notif.Data.Args[2])
+	}
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	// Block any mount targeting a protected path (overlay, remount, tmpfs, bind over it).
+	if isProtected(target, protected) {
+		resp.Error = -int32(unix.EPERM)
+		logf("BLOCKED mount target=%s pid=%d flags=0x%x bin=%s", target, pid, flags, exePath(pid))
+		return
+	}
+
+	// Block non-recursive bind mount where the source is the workdir or
+	// an ancestor of it. A non-recursive bind of any path that contains
+	// the workdir doesn't carry the /dev/null sub-mounts, exposing masked files.
+	if workdir != "" && flags&unix.MS_BIND != 0 && flags&unix.MS_REC == 0 && source != "" {
+		if source == workdir || isSubPath(source, workdir) {
+			resp.Error = -int32(unix.EPERM)
+			logf(
+				"BLOCKED mount(MS_BIND) source=%s target=%s pid=%d bin=%s (workdir ancestor bind)",
+				source,
+				target,
+				pid,
+				exePath(pid),
+			)
+			return
+		}
+	}
+
+	// Block procfs mounts from the sidecar's PID namespace. A new procfs
+	// mount exposes /proc/1/mem without the /dev/null mask. Nested
+	// container processes (different PID namespace) are allowed -- their
+	// procfs only shows their own PID namespace, not the sidecar's PID 1.
+	if fstype == "proc" && isSidecarPIDNS(pid, myPIDNS) {
+		resp.Error = -int32(unix.EPERM)
+		logf("BLOCKED mount(proc) target=%s pid=%d bin=%s (sidecar PID namespace)", target, pid, exePath(pid))
+		return
+	}
+
+	resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+}
+
+// handleMountSetattr blocks mount_setattr on protected paths.
+// mount_setattr(dirfd, path, flags, attr, size): arg1 = path pointer.
+func handleMountSetattr(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	pid uint32,
+	protected map[string]bool,
+	notifFD int,
+) {
+	path, err := readStringFromPID(pid, notif.Data.Args[1])
+	if err != nil {
+		logf("WARNING: mount_setattr cannot read path pid=%d: %v (allowing)", pid, err)
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+	path = resolvePath(path, pid)
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	if isProtected(path, protected) {
+		resp.Error = -int32(unix.EPERM)
+		logf("BLOCKED mount_setattr path=%s pid=%d bin=%s", path, pid, exePath(pid))
+	} else {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+	}
+}
+
+// handleMoveMount blocks move_mount targeting protected paths.
+// move_mount(from_dirfd, from_path, to_dirfd, to_path, flags):
+//
+//	arg1 = from_path, arg3 = to_path.
+func handleMoveMount(notif *seccompNotif, resp *seccompNotifResp, pid uint32, protected map[string]bool, notifFD int) {
+	toPath, err := readStringFromPID(pid, notif.Data.Args[3])
+	if err != nil {
+		logf("WARNING: move_mount cannot read to_path pid=%d: %v (allowing)", pid, err)
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+	toPath = resolvePath(toPath, pid)
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	if isProtected(toPath, protected) {
+		resp.Error = -int32(unix.EPERM)
+		logf("BLOCKED move_mount to_path=%s pid=%d bin=%s", toPath, pid, exePath(pid))
+	} else {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+	}
+}
+
+// handleOpenTree blocks non-recursive open_tree clones of the workdir
+// or any ancestor. open_tree(dirfd, path, flags): arg1 = path, arg2 = flags.
+// A non-recursive OPEN_TREE_CLONE strips sub-mounts (like non-recursive bind),
+// exposing masked file contents at the detached mount.
+func handleOpenTree(notif *seccompNotif, resp *seccompNotifResp, pid uint32, workdir string, notifFD int) {
+	flags := notif.Data.Args[2]
+
+	// Only care about OPEN_TREE_CLONE without AT_RECURSIVE.
+	if flags&unix.OPEN_TREE_CLONE == 0 || flags&unix.AT_RECURSIVE != 0 {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+
+	path, err := readStringFromPID(pid, notif.Data.Args[1])
+	if err != nil {
+		logf("WARNING: open_tree cannot read path pid=%d: %v (allowing)", pid, err)
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+	path = resolvePath(path, pid)
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	// Block if path is the workdir or an ancestor of it.
+	if workdir != "" && (path == workdir || isSubPath(path, workdir)) {
+		resp.Error = -int32(unix.EPERM)
+		logf("BLOCKED open_tree(CLONE) path=%s pid=%d bin=%s (workdir ancestor clone)", path, pid, exePath(pid))
+		return
+	}
+
+	resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+}
+
+// handleFsopen blocks fsopen("proc") from the sidecar's PID namespace.
+// fsopen(fsname, flags): arg0 = fsname string.
+// A new procfs filesystem context from the sidecar's PID namespace would
+// expose /proc/1/mem without the /dev/null mask.
+func handleFsopen(notif *seccompNotif, resp *seccompNotifResp, pid uint32, myPIDNS string, notifFD int) {
+	fsname, err := readStringFromPID(pid, notif.Data.Args[0])
+	if err != nil {
+		logf("WARNING: fsopen cannot read fsname pid=%d: %v (allowing)", pid, err)
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	if fsname == "proc" && isSidecarPIDNS(pid, myPIDNS) {
+		resp.Error = -int32(unix.EPERM)
+		logf("BLOCKED fsopen(proc) pid=%d bin=%s (sidecar PID namespace)", pid, exePath(pid))
+		return
+	}
+
+	resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+}
+
+// ---------------------------------------------------------------------------
+// PID 1 protection
+// ---------------------------------------------------------------------------
+
+// handlePIDCheck blocks ptrace/process_vm_readv/process_vm_writev
+// targeting PID 1 (the supervisor process).
+//
+//	ptrace(op, pid, ...):     arg1 = target pid
+//	process_vm_readv(pid, ...):  arg0 = target pid
+//	process_vm_writev(pid, ...): arg0 = target pid
+func handlePIDCheck(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	callerPID uint32,
+	myPID uint64,
+	nr int32,
+	notifFD int,
+) {
+	targetPID := notif.Data.Args[0]
+	if nr == int32(unix.SYS_PTRACE) {
+		targetPID = notif.Data.Args[1]
+	}
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	if targetPID == myPID {
+		resp.Error = -int32(unix.EPERM)
+		name := "ptrace"
+		if nr == int32(unix.SYS_PROCESS_VM_READV) {
+			name = "process_vm_readv"
+		} else if nr == int32(unix.SYS_PROCESS_VM_WRITEV) {
+			name = "process_vm_writev"
+		}
+		logf("BLOCKED %s targeting PID 1 from pid=%d bin=%s", name, callerPID, exePath(callerPID))
+	} else {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Protected-path operations
+// ---------------------------------------------------------------------------
+
+// handleOpenat blocks opens of /proc/1/* sensitive paths from sidecar
+// PID namespace processes.
+//
+//	openat(dirfd, pathname, flags, mode)
+//	args[0]=dirfd, args[1]=pathname ptr
+//
+// Scoped to sidecar PID NS only. Nested container processes skip entirely.
+// Only blocks /proc/1/* paths — all other opens get CONTINUE immediately.
+func handleOpenat(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	pid uint32,
+	myPIDNS string,
+	notifFD int,
+) {
+	if !isSidecarPIDNS(pid, myPIDNS) {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+
+	pathname, err := readStringFromPID(pid, notif.Data.Args[1])
+	if err != nil {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+
+	path := resolvePath(pathname, pid)
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	if strings.HasPrefix(path, "/proc/1/") && slices.Contains(proc1Sensitive, path) {
+		resp.Error = -int32(unix.EACCES)
+		logf("BLOCKED openat path=%s pid=%d bin=%s", path, pid, exePath(pid))
+		return
+	}
+
+	resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+}
+
+// handleUnlinkat blocks deletion of protected paths.
+//
+//	unlinkat(dirfd, pathname, flags)
+//	args[0]=dirfd, args[1]=pathname ptr
+func handleUnlinkat(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	pid uint32,
+	protected map[string]bool,
+	notifFD int,
+) {
+	pathname, err := readStringFromPID(pid, notif.Data.Args[1])
+	if err != nil {
+		logf("WARNING: unlinkat cannot read path pid=%d: %v (allowing)", pid, err)
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+	path := resolvePath(pathname, pid)
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	if isProtected(path, protected) {
+		resp.Error = -int32(unix.EACCES)
+		logf("BLOCKED unlinkat path=%s pid=%d bin=%s", path, pid, exePath(pid))
+	} else {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+	}
+}
+
+// handleSymlinkat blocks symlink creation targeting protected paths.
+//
+//	symlinkat(target, newdirfd, linkpath)
+//	args[0]=target ptr, args[1]=newdirfd, args[2]=linkpath ptr
+func handleSymlinkat(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	pid uint32,
+	protected map[string]bool,
+	notifFD int,
+) {
+	linkpath, err := readStringFromPID(pid, notif.Data.Args[2])
+	if err != nil {
+		logf("WARNING: symlinkat cannot read linkpath pid=%d: %v (allowing)", pid, err)
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+	path := resolvePath(linkpath, pid)
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	if isProtected(path, protected) {
+		resp.Error = -int32(unix.EACCES)
+		logf("BLOCKED symlinkat linkpath=%s pid=%d bin=%s", path, pid, exePath(pid))
+	} else {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+	}
+}
+
+// checkDualPathProtected is the common logic for linkat and renameat2:
+// read two paths from args[1] and args[3], block if either is protected.
+func checkDualPathProtected(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	pid uint32,
+	protected map[string]bool,
+	notifFD int,
+	syscallName string,
+) {
+	oldpath, err := readStringFromPID(pid, notif.Data.Args[1])
+	if err != nil {
+		logf("WARNING: %s cannot read oldpath pid=%d: %v (allowing)", syscallName, pid, err)
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+	newpath, err := readStringFromPID(pid, notif.Data.Args[3])
+	if err != nil {
+		logf("WARNING: %s cannot read newpath pid=%d: %v (allowing)", syscallName, pid, err)
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+
+	src := resolvePath(oldpath, pid)
+	dst := resolvePath(newpath, pid)
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	if isProtected(src, protected) || isProtected(dst, protected) {
+		resp.Error = -int32(unix.EACCES)
+		logf("BLOCKED %s oldpath=%s newpath=%s pid=%d bin=%s",
+			syscallName, src, dst, pid, exePath(pid))
+	} else {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+	}
+}
+
+// handleLinkat blocks hardlink creation to/from protected paths.
+//
+//	linkat(olddirfd, oldpath, newdirfd, newpath, flags)
+//	args[0]=olddirfd, args[1]=oldpath ptr, args[2]=newdirfd, args[3]=newpath ptr
+func handleLinkat(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	pid uint32,
+	protected map[string]bool,
+	notifFD int,
+) {
+	checkDualPathProtected(notif, resp, pid, protected, notifFD, "linkat")
+}
+
+// handleRenameat2 blocks renaming into/out of protected paths.
+//
+//	renameat2(olddirfd, oldpath, newdirfd, newpath, flags)
+//	args[0]=olddirfd, args[1]=oldpath ptr, args[2]=newdirfd, args[3]=newpath ptr
+func handleRenameat2(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	pid uint32,
+	protected map[string]bool,
+	notifFD int,
+) {
+	checkDualPathProtected(notif, resp, pid, protected, notifFD, "renameat2")
+}
+
+// ---------------------------------------------------------------------------
+// Firewall lock (netfilter modification)
+// ---------------------------------------------------------------------------
+
+// netfilterBin is the only binary that legitimately calls netfilter APIs.
+// All iptables symlinks resolve to this binary.
+const netfilterBin = "/usr/sbin/xtables-nft-multi"
+
+// netfilterParent is the only allowed parent for netfilter operations.
+// netavark is podman's network manager — it exec's xtables-nft-multi
+// to configure per-container bridge rules. It does not expose a CLI
+// for arbitrary rule manipulation.
+const netfilterParent = "/usr/local/lib/podman/netavark"
+
+// readPPID returns the parent PID of a process by parsing /proc/<pid>/status.
+// Returns 0 on error.
+func readPPID(pid uint32) uint32 {
+	f, err := os.Open(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "PPid:\t") {
+			continue
+		}
+		v, parseErr := strconv.ParseUint(strings.TrimPrefix(line, "PPid:\t"), 10, 32)
+		if parseErr != nil {
+			return 0
+		}
+		return uint32(v)
+	}
+	return 0
+}
+
+// isNetfilterAllowed checks whether a process is xtables-nft-multi
+// spawned by netavark. This is the only legitimate path for netfilter
+// modification inside the sidecar. The caller (xtables) is blocked
+// waiting for the supervisor, so neither it nor its parent (netavark,
+// waiting for the child) can exit during this check — no PID reuse race.
+func isNetfilterAllowed(pid uint32) bool {
+	if exePath(pid) != netfilterBin {
+		return false
+	}
+	ppid := readPPID(pid)
+	if ppid == 0 {
+		return false
+	}
+	return exePath(ppid) == netfilterParent
+}
+
+// handleSetsockopt blocks IPT_SO_SET_REPLACE for sidecar processes
+// unless the caller is xtables-nft-multi spawned by netavark.
+// Legitimate firewall changes from the host arrive via `podman exec`,
+// which does NOT inherit the seccomp-notif filter (setns, not fork).
+// Integer args only — zero TOCTOU.
+//
+//	setsockopt(fd, level, optname, optval, optlen)
+//	args[1]=level, args[2]=optname
+func handleSetsockopt(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	pid uint32,
+	myPIDNS string,
+	notifFD int,
+) {
+	if !isSidecarPIDNS(pid, myPIDNS) {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+
+	level := notif.Data.Args[1]
+	optname := notif.Data.Args[2]
+
+	isNF := (level == unix.SOL_IP || level == unix.SOL_IPV6) && optname == iptSOSetReplace
+	if !isNF {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	if isNetfilterAllowed(pid) {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+
+	resp.Error = -int32(unix.EPERM)
+	logf("BLOCKED setsockopt(IPT_SO_SET_REPLACE) pid=%d level=%d bin=%s parent=%s",
+		pid, level, exePath(pid), exePath(readPPID(pid)))
+}
+
+// handleSocket blocks creation of NETLINK_NETFILTER sockets for sidecar
+// processes unless the caller is xtables-nft-multi spawned by netavark.
+// Legitimate firewall changes from the host arrive via `podman exec`,
+// which does NOT inherit the seccomp-notif filter.
+// Integer args only — zero TOCTOU.
+//
+//	socket(domain, type, protocol)
+//	args[0]=domain, args[2]=protocol
+func handleSocket(
+	notif *seccompNotif,
+	resp *seccompNotifResp,
+	pid uint32,
+	myPIDNS string,
+	notifFD int,
+) {
+	if !isSidecarPIDNS(pid, myPIDNS) {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+
+	domain := notif.Data.Args[0]
+	protocol := notif.Data.Args[2]
+
+	if domain != unix.AF_NETLINK || protocol != unix.NETLINK_NETFILTER {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+
+	if !checkNotifValid(notifFD, &notif.ID) {
+		return
+	}
+
+	if isNetfilterAllowed(pid) {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+		return
+	}
+
+	resp.Error = -int32(unix.EPERM)
+	logf("BLOCKED socket(AF_NETLINK, NETLINK_NETFILTER) pid=%d bin=%s parent=%s",
+		pid, exePath(pid), exePath(readPPID(pid)))
+}

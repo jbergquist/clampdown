@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -445,8 +446,13 @@ func runTests(m *testing.M) (code int) {
 			return 1
 		}
 	}
-	// Push python:alpine into the integ sidecar for the socket data flow
-	// test (busybox lacks a Unix socket client).
+	// Push python:alpine into the default sidecar for syscall blocking
+	// tests and into the integ sidecar for the socket data flow test.
+	err = rt.PushImage(ctx, sidecarName, []string{pythonAlpineImage})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "push python:alpine to sidecar: %v\n", err)
+		return 1
+	}
 	err = rt.PushImage(ctx, integSidecar, []string{pythonAlpineImage})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "push python:alpine to integ: %v\n", err)
@@ -712,6 +718,101 @@ func TestSealInject(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Syscall blocking: verify seccomp blocks dangerous syscalls at runtime
+// inside nested containers.
+// ---------------------------------------------------------------------------
+
+func TestSyscallBlocking(t *testing.T) {
+	t.Parallel()
+
+	// Shell subtests: common attack primitives via busybox.
+
+	t.Run("unshare_newuser", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "unshare", "-U", "id"))
+		requireFail(t, out, err)
+	})
+
+	t.Run("mount_tmpfs", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "mount", "-t", "tmpfs", "none", "/mnt"))
+		requireFail(t, out, err)
+	})
+
+	// Python subtests: invoke raw syscalls via ctypes to verify seccomp
+	// blocks them at the kernel level. Uses python:alpine (pushed in TestMain).
+	//
+	// Template args: amd64 syscall number, arm64 syscall number.
+	const pythonSyscallTemplate = `import ctypes, ctypes.util, platform, sys
+libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+libc.syscall.restype = ctypes.c_long
+nums = {'x86_64': %d, 'aarch64': %d}
+arch = platform.machine()
+if arch not in nums:
+    print('skip: unsupported arch ' + arch)
+    sys.exit(0)
+ret = libc.syscall(nums[arch])
+errno = ctypes.get_errno()
+if errno != 0:
+    print('blocked: errno=' + str(errno))
+    sys.exit(1)
+print('SECURITY VIOLATION: syscall succeeded')
+sys.exit(0)`
+
+	type syscallCase struct {
+		name  string
+		amd64 int
+		arm64 int
+	}
+	cases := []syscallCase{
+		{"bpf", 321, 280},
+		{"io_uring_setup", 425, 425},
+		{"ptrace", 101, 117},
+		{"perf_event_open", 298, 241},
+		{"userfaultfd", 323, 282},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pyCmd := fmt.Sprintf(pythonSyscallTemplate, tc.amd64, tc.arm64)
+			cmd := []string{innerPodman, "run", "--rm", pythonAlpineImage, "python3", "-c", pyCmd}
+			out, err := sidecarExec(t, sidecarName, cmd)
+			requireFail(t, out, err)
+			if bytes.Contains(out, []byte("SECURITY VIOLATION")) {
+				t.Fatalf("syscall %s was not blocked by seccomp", tc.name)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Protected path access: verify Landlock and readonlyPaths block runtime
+// access to sensitive paths inside nested containers.
+// ---------------------------------------------------------------------------
+
+func TestProtectedPathAccess(t *testing.T) {
+	t.Parallel()
+
+	t.Run("proc_sys_write", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c", "echo x > /proc/sys/kernel/hostname"))
+		requireFail(t, out, err)
+	})
+
+	t.Run("usr_bin_write", func(t *testing.T) {
+		t.Parallel()
+		// Landlock enforces read-only on /usr.
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "touch", "/usr/bin/evil"))
+		requireFail(t, out, err)
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Egress: registry pulls and nested container network access.
 // Sequential — network operations are flaky under contention.
 // ---------------------------------------------------------------------------
@@ -909,6 +1010,192 @@ func TestCredentialForwarding(t *testing.T) {
 // gate is our own integration tests above (14 deterministic checks).
 // CDK provides a second set of eyes.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Supervisor: seccomp-notif handler enforcement tests.
+// Uses "podman run --rm <sidecar-image> <cmd>" so the command is a direct
+// child of the entrypoint and inherits the seccomp-notif filter.
+// "podman exec" enters via setns and does NOT inherit the filter.
+// ---------------------------------------------------------------------------
+
+// sidecarRun runs a one-shot sidecar container where <cmd> is a direct child
+// of the entrypoint — inheriting the seccomp-notif filter. The workdir is
+// bind-mounted so tests can place binaries there.
+func sidecarRun(t *testing.T, wd string, env map[string]string, cmd ...string) ([]byte, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	args := []string{
+		"run", "--rm", "--privileged",
+		"--read-only",
+		"-v", wd + ":" + wd,
+		"-w", wd,
+	}
+	for k, v := range env {
+		args = append(args, "-e", k+"="+v)
+	}
+	args = append(args, "clampdown-sidecar:latest")
+	args = append(args, cmd...)
+
+	out, err := exec.CommandContext(ctx, rt.Name(), args...).CombinedOutput()
+	return out, err
+}
+
+func TestSupervisor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("exec_allowlist_logged", func(t *testing.T) {
+		t.Parallel()
+		// The running sidecars should have the exec allowlist in their logs.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		logs, err := rt.Logs(ctx, sidecarName)
+		if err != nil {
+			t.Fatalf("read sidecar logs: %v", err)
+		}
+		output := string(logs)
+		for _, bin := range []string{
+			"/usr/local/bin/podman",
+			"/usr/local/bin/crun",
+			"/usr/sbin/xtables-nft-multi",
+			"/sandbox-seal",
+			"/entrypoint",
+		} {
+			if !strings.Contains(output, "exec allowlist: "+bin+" sha256=") {
+				t.Errorf("expected %s in exec allowlist log", bin)
+			}
+		}
+	})
+
+	t.Run("exec_rootfs_binary_allowed", func(t *testing.T) {
+		t.Parallel()
+		// A rootfs binary (/log) runs as a direct child of the entrypoint.
+		// The exec allowlist must allow it.
+		out, err := sidecarRun(t, workdir,
+			map[string]string{"SANDBOX_UID": "0", "SANDBOX_GID": "0", "SANDBOX_WORKDIR": workdir},
+			"/log", "test", "exec-allowed")
+		requireSuccess(t, out, err)
+	})
+
+	t.Run("exec_unknown_binary_blocked", func(t *testing.T) {
+		t.Parallel()
+		// Write an executable file to the workdir. It doesn't need to
+		// be a valid binary — the supervisor's exec allowlist rejects
+		// it (hash not in allowlist) BEFORE the kernel tries to load it.
+		fakeBin := filepath.Join(workdir, "fake_exec_test")
+		err := os.WriteFile(fakeBin, []byte("\x7fELF_fake_binary"), 0o755)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(fakeBin)
+
+		out, err := sidecarRun(t, workdir,
+			map[string]string{"SANDBOX_UID": "0", "SANDBOX_GID": "0", "SANDBOX_WORKDIR": workdir},
+			fakeBin)
+		requireFail(t, out, err)
+	})
+
+	t.Run("exec_symlink_to_unknown_blocked", func(t *testing.T) {
+		t.Parallel()
+		// Create a symlink in the workdir pointing to a fake binary.
+		// The supervisor resolves the symlink via EvalSymlinks, finds
+		// the target is not in the allowlist, and blocks the exec.
+		fakeBin := filepath.Join(workdir, "fake_symlink_target")
+		err := os.WriteFile(fakeBin, []byte("\x7fELF_symlink_test"), 0o755)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(fakeBin)
+
+		link := filepath.Join(workdir, "link_to_fake")
+		err = os.Symlink(fakeBin, link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(link)
+
+		out, err := sidecarRun(t, workdir,
+			map[string]string{"SANDBOX_UID": "0", "SANDBOX_GID": "0", "SANDBOX_WORKDIR": workdir},
+			link)
+		requireFail(t, out, err)
+	})
+
+	t.Run("exec_symlink_to_rootfs_allowed", func(t *testing.T) {
+		t.Parallel()
+		// Create a symlink in the workdir pointing to /log (rootfs binary).
+		// The supervisor resolves the symlink → /log → in allowlist → allowed.
+		link := filepath.Join(workdir, "link_to_log")
+		err := os.Symlink("/log", link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(link)
+
+		out, err := sidecarRun(t, workdir,
+			map[string]string{"SANDBOX_UID": "0", "SANDBOX_GID": "0", "SANDBOX_WORKDIR": workdir},
+			link, "test", "symlink-allowed")
+		requireSuccess(t, out, err)
+	})
+
+	t.Run("exec_path_collision_blocked", func(t *testing.T) {
+		t.Parallel()
+		// Write a file named "entrypoint" in the workdir — same name
+		// as the rootfs binary but different path. The allowlist keys
+		// by absolute resolved path, so /workdir/entrypoint != /entrypoint.
+		collision := filepath.Join(workdir, "entrypoint")
+		err := os.WriteFile(collision, []byte("\x7fELF_collision"), 0o755)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(collision)
+
+		out, err := sidecarRun(t, workdir,
+			map[string]string{"SANDBOX_UID": "0", "SANDBOX_GID": "0", "SANDBOX_WORKDIR": workdir},
+			collision)
+		requireFail(t, out, err)
+	})
+
+	t.Run("iptables_direct_blocked", func(t *testing.T) {
+		t.Parallel()
+		// Run xtables-nft-multi directly as a child of the entrypoint.
+		// The binary IS in the exec allowlist (rootfs), but its
+		// socket(AF_NETLINK, NETLINK_NETFILTER) call must be blocked
+		// because the parent is the entrypoint, not netavark.
+		out, err := sidecarRun(t, workdir,
+			map[string]string{"SANDBOX_UID": "0", "SANDBOX_GID": "0", "SANDBOX_WORKDIR": workdir},
+			"/usr/sbin/xtables-nft-multi", "iptables", "-L")
+		requireFail(t, out, err)
+	})
+
+	t.Run("no_false_positive_blocks", func(t *testing.T) {
+		t.Parallel()
+		// After all sidecar operations, verify no legitimate syscalls
+		// were blocked by the new handlers.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		logs, err := rt.Logs(ctx, sidecarName)
+		if err != nil {
+			t.Fatalf("read sidecar logs: %v", err)
+		}
+		output := string(logs)
+		for _, bad := range []string{
+			"BLOCKED execve",
+			"BLOCKED execveat",
+			"BLOCKED openat",
+			"BLOCKED unlinkat",
+			"BLOCKED symlinkat",
+			"BLOCKED linkat",
+			"BLOCKED renameat2",
+			"BLOCKED socket(AF_NETLINK",
+			"BLOCKED setsockopt",
+		} {
+			if strings.Contains(output, bad) {
+				t.Errorf("unexpected %q in sidecar logs — false positive", bad)
+			}
+		}
+	})
+}
 
 func TestSecurityAudit(t *testing.T) {
 	t.Run("cdk", func(t *testing.T) {

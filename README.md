@@ -39,8 +39,9 @@ clampdown runs three container types with different privilege levels:
 
 - The sidecar is privileged enough to run podman and enforce firewall rules, but has no
 shell and no libc so it cannot be repurposed. A seccomp-notif supervisor intercepts
-all mount/umount operations in real time, blocking attempts to unmount masked paths
-or remount protected files -- closing the gap where Landlock cannot be applied.
+20 syscalls in real time -- blocking unmounts of masked paths, execution of unknown
+binaries, deletion of protected files, and unauthorized firewall modification --
+closing the gap where Landlock cannot be applied.
 - The agent never holds real API keys -- it gets a dummy key and talks to a local auth
 proxy that injects the real credentials. Even if the agent connects to the upstream API
 directly, the dummy key produces a 401.
@@ -97,18 +98,31 @@ A container that fails any check is killed before its entrypoint runs.
 
 Both hooks apply to every `podman run` the agent issues. There is no opt-out.
 
-### Sidecar mount supervisor
+### Sidecar supervisor
 
 The sidecar cannot use Landlock (mount() internally triggers Landlock path hooks).
 To compensate, the sidecar entrypoint installs a seccomp-notif BPF filter that
-intercepts mount, umount, and process-targeting syscalls. A supervisor goroutine
-evaluates each call against a set of protected paths discovered from
-`/proc/self/mountinfo` at startup.
+intercepts 20 syscalls covering mount operations, exec verification, protected-path
+file operations, process targeting, and firewall modification. A supervisor goroutine
+evaluates each call against policy and either continues the syscall or blocks it.
 
 This blocks attempts to unmount masked paths (exposing `.env` contents), remount
-protected paths read-write, create a new procfs to access `/proc/1/mem`, or use
-ptrace/process_vm_readv to read the supervisor's memory. Legitimate mount operations
-(podman creating containers) pass through unimpeded.
+protected paths read-write, create a new procfs to access `/proc/1/mem`, execute
+binaries not present on the rootfs at startup (SHA-256 hash-verified allowlist),
+delete or replace protected files, modify iptables rules, or use ptrace to read
+the supervisor's memory. Legitimate operations (podman creating containers, netavark
+configuring bridge rules) pass through unimpeded.
+
+The **exec allowlist** walks the rootfs at startup and SHA-256 hashes every
+executable. On each execve/execveat from sidecar PID namespace processes, the
+supervisor verifies the binary against the startup snapshot. Unknown binaries are
+blocked with EACCES. Nested container processes (different PID namespace) skip the
+check -- their exec is governed by Landlock and the workload seccomp profile.
+
+The **firewall lock** blocks netfilter socket creation and iptables rule replacement
+except from the netavark->xtables-nft-multi chain (podman's network manager). Since
+`podman exec` from the host enters via setns (not fork), it does not inherit the
+filter -- legitimate firewall changes from the launcher are exempt.
 
 The filter is inherited by all processes in the sidecar. For agent and nested
 containers, the workload seccomp profile already blocks mount/umount entirely
