@@ -21,32 +21,34 @@ spawns gets the same enforcement.
 
 ## Container overview
 
-clampdown runs three container types with different privilege levels:
+clampdown runs four container types with different privilege levels:
 
-| | Sidecar | Agent | Tool (nested) |
-|---|---|---|---|
-| Purpose | Container runtime + firewall | AI agent process | Tools the agent spawns |
-| Base image | `FROM scratch` (no shell, no libc) | Alpine | User-chosen |
-| Capabilities | 16 (`SYS_ADMIN`, `NET_ADMIN`, ...) | 0 (`cap-drop=ALL`) | 10 default (effective set empty) |
-| Seccomp | ~85 blocked | ~133 blocked | ~133 blocked + inherited sidecar |
-| Landlock | No (incompatible with `mount()`) | workdir RW, rootfs RO | Derived from bind mounts |
-| Secrets | Registry credentials (opt-in) | None (`sk-proxy` dummy key) | None |
-| Network egress | N/A | Deny + allowlist only | Allow, private CIDRs blocked |
-| Rootfs | Read-only | Read-only | Read-only |
-| Runs as | root (userns-mapped) | Non-root | Non-root (hook-enforced) |
-| SELinux | `container_engine_t` | `container_t` | `container_t` |
-| AppArmor | unconfined | confined | confined |
+| | Sidecar | Auth Proxy | Agent | Tool (nested) |
+|---|---|---|---|---|
+| Purpose | Container runtime + firewall | API key injection | AI agent process | Tools the agent spawns |
+| Base image | `FROM scratch` (no shell, no libc) | `FROM scratch` | Alpine | User-chosen |
+| Capabilities | 16 (`SYS_ADMIN`, `NET_ADMIN`, ...) | 0 (`cap-drop=ALL`) | 0 (`cap-drop=ALL`) | 10 default (effective set empty) |
+| Seccomp | ~85 blocked | ~133 blocked | ~133 blocked | ~133 blocked + inherited sidecar |
+| Landlock | No (incompatible with `mount()`) | RO rootfs, TCP 443+53 only | workdir RW, rootfs RO | Derived from bind mounts |
+| Secrets | Registry credentials (opt-in) | Real API keys | None (`sk-proxy` dummy key) | None |
+| Network egress | N/A | TCP 443, 53 (Landlock) | Deny + allowlist only | Allow, private CIDRs blocked |
+| Rootfs | Read-only | Read-only | Read-only | Read-only |
+| Runs as | root (userns-mapped) | Non-root | Non-root | Non-root (hook-enforced) |
+| SELinux | `container_engine_t` | `container_t` | `container_t` | `container_t` |
+| AppArmor | unconfined | confined | confined | confined |
+| Core dumps | Allowed | Disabled (`ulimit core=0:0`) | Disabled | Allowed |
 
 - The sidecar is privileged enough to run podman and enforce firewall rules, but has no
-shell and no libc so it cannot be repurposed. A seccomp-notif supervisor intercepts
-20 syscalls in real time -- blocking unmounts of masked paths, execution of unknown
-binaries, deletion of protected files, and unauthorized firewall modification --
-closing the gap where Landlock cannot be applied.
-- The agent never holds real API keys -- it gets a dummy key and talks to a local auth
-proxy that injects the real credentials. Even if the agent connects to the upstream API
-directly, the dummy key produces a 401.
-- Tool containers have open egress to the public internet but hold no secrets: 
-they cannot reach private networks, and credentials are never forwarded unless explicitly opted in.
+  shell and no libc so it cannot be repurposed. A seccomp-notif supervisor intercepts
+  20 syscalls in real time -- blocking unmounts of masked paths, execution of unknown
+  binaries, deletion of protected files, and unauthorized firewall modification --
+  closing the gap where Landlock cannot be applied.
+- The auth proxy holds the only copy of real API keys. It runs in a `FROM scratch`
+  container with no shell, no writable filesystem, no capabilities, and core dumps
+  disabled. The agent gets a dummy key (`sk-proxy`) and a base URL pointing at the
+  proxy. Even direct connections to the upstream API produce a 401.
+- Tool containers have open egress to the public internet but hold no secrets:
+  they cannot reach private networks, and credentials are never forwarded unless explicitly opted in.
 
 ---
 
@@ -151,6 +153,25 @@ Landlock V3 (kernel >= 6.2) is a hard requirement. The launcher refuses to start
 Landlock is absent. Kernel >= 6.12 is recommended for full feature coverage (V4 TCP
 connect at 6.7, V5 IoctlDev at 6.10, V6 IPC scoping at 6.12). V7 audit logging
 requires 6.15+.
+
+### API key isolation
+
+The agent never receives real API credentials. A separate auth proxy container
+holds the real keys and injects them into upstream requests.
+
+```
+Agent (sk-proxy) ──> Auth Proxy (real key) ──> Upstream API
+```
+
+The proxy runs in its own `FROM scratch` container: no shell, no writable
+filesystem, no capabilities (`cap-drop=ALL`), core dumps disabled, Landlock
+restricting TCP to ports 443 and 53 only. Even if the agent connects to the
+upstream API directly (port 443 is allowed for infrastructure domains), it
+sends the dummy key `sk-proxy` and gets a 401.
+
+Keys are resolved from two sources -- the host environment and `.clampdownrc`.
+Neither is forwarded into the agent container. The proxy logs every API request
+(method, path, status, model, sizes, duration) for the audit trail.
 
 ### Network isolation
 
