@@ -273,10 +273,10 @@ func ListRules(statePath string) error {
 		return err
 	}
 
-	fmt.Fprintln(os.Stderr, "=== Agent ===")
+	fmt.Fprintln(os.Stdout, "=== Agent ===")
 	printStateRules(state.Agent)
 
-	fmt.Fprintln(os.Stderr, "\n=== Pods ===")
+	fmt.Fprintln(os.Stdout, "\n=== Pods ===")
 	printStateRules(state.Pod)
 
 	return nil
@@ -293,20 +293,20 @@ func printStateRules(entries []FirewallEntry) {
 	}
 
 	if len(allowed) == 0 && len(blocked) == 0 {
-		fmt.Fprintln(os.Stderr, "  (defaults only)")
+		fmt.Fprintln(os.Stdout, "  (defaults only)")
 		return
 	}
 
 	if len(allowed) > 0 {
-		fmt.Fprintln(os.Stderr, "  Allowed:")
+		fmt.Fprintln(os.Stdout, "  Allowed:")
 		for _, e := range allowed {
-			fmt.Fprintf(os.Stderr, "    %s (%s) :%s\n", e.Host, strings.Join(e.IPs, ", "), portStr(e.Port))
+			fmt.Fprintf(os.Stdout, "    %s (%s) :%s\n", e.Host, strings.Join(e.IPs, ", "), portStr(e.Port))
 		}
 	}
 	if len(blocked) > 0 {
-		fmt.Fprintln(os.Stderr, "  Blocked:")
+		fmt.Fprintln(os.Stdout, "  Blocked:")
 		for _, e := range blocked {
-			fmt.Fprintf(os.Stderr, "    %s (%s) :%s\n", e.Host, strings.Join(e.IPs, ", "), portStr(e.Port))
+			fmt.Fprintf(os.Stdout, "    %s (%s) :%s\n", e.Host, strings.Join(e.IPs, ", "), portStr(e.Port))
 		}
 	}
 }
