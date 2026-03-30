@@ -108,8 +108,14 @@ func Delete(ctx context.Context, rt container.Runtime, sessionID string) error {
 		return fmt.Errorf("no containers found for session %s", sessionID)
 	}
 
+	// Check that all containers are stopped.
+	for _, info := range infos {
+		if info.State == "running" {
+			return fmt.Errorf("session %s has running containers — use 'stop' first", sessionID)
+		}
+	}
+
 	// Remove order: agents → proxies → sidecars.
-	// Agent and proxy network namespaces depend on the sidecar.
 	var agents, proxies, sidecars []string
 	for _, info := range infos {
 		switch info.Labels["clampdown.role"] {
@@ -134,13 +140,13 @@ func Delete(ctx context.Context, rt container.Runtime, sessionID string) error {
 	return nil
 }
 
-// Print writes a formatted session table to stderr.
+// Print writes a formatted session table to stdout.
 func Print(sessions []Session) {
 	if len(sessions) == 0 {
-		fmt.Fprintln(os.Stderr, "No sessions.")
+		fmt.Fprintln(os.Stdout, "No sessions.")
 		return
 	}
-	w := tabwriter.NewWriter(os.Stderr, 0, 0, 2, ' ', 0)
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "SESSION\tAGENT\tWORKDIR\tSTATUS\tAGENTNET\tPODNET\tUPTIME")
 	for _, s := range sessions {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",

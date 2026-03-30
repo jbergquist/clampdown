@@ -169,8 +169,15 @@ func Run(args []string) error {
 		},
 		Commands: append(agentCommands(cfg),
 			&ucli.Command{
-				Name:   "list",
-				Usage:  "List running sandbox sessions",
+				Name:  "list",
+				Usage: "List running sandbox sessions",
+				Flags: []ucli.Flag{
+					&ucli.BoolFlag{
+						Name:    "all",
+						Aliases: []string{"a"},
+						Usage:   "Include stopped sessions",
+					},
+				},
 				Action: listSessions,
 			},
 			&ucli.Command{
@@ -373,11 +380,25 @@ func listSessions(ctx context.Context, cmd *ucli.Command) error {
 	if err != nil {
 		return err
 	}
-	sessions, err := session.List(ctx, rt)
+	all, err := session.List(ctx, rt)
 	if err != nil {
 		return err
 	}
-	session.Print(sessions)
+	if cmd.Bool("all") {
+		session.Print(all)
+		return nil
+	}
+	var running []session.Session
+	for _, s := range all {
+		if s.State == "running" {
+			running = append(running, s)
+		}
+	}
+	if len(running) == 0 && len(all) > 0 {
+		fmt.Fprintln(os.Stdout, "No running sessions. Use --all to see stopped sessions.")
+		return nil
+	}
+	session.Print(running)
 	return nil
 }
 
