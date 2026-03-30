@@ -4,18 +4,17 @@ package sandbox
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
 
 	"github.com/89luca89/clampdown/pkg/agent"
@@ -58,17 +57,43 @@ type Options struct {
 	Workdir        string
 }
 
-// errTamper is returned when the watcher detects modification of a
-// read-only host path, indicating a possible container escape.
-var errTamper = errors.New("session killed: read-only path tampered")
+// SessionState persists session metadata for stop/delete operations.
+// Stored at $STATE/session-<id>.json.
+type SessionState struct {
+	ID      string   `json:"id"`
+	Agent   string   `json:"agent"`
+	Workdir string   `json:"workdir"`
+	Created []string `json:"created"`
+	Audit   string   `json:"audit"`
+}
 
-// Run starts the sidecar and agent, blocking until the agent exits.
-//
-//nolint:gocognit,gocyclo,cyclop // Run orchestrates the full sandbox lifecycle: sidecar, proxy, agent, firewall, tripwire.
+// generateSessionID returns a 6-character random hex string.
+func generateSessionID() string {
+	var b [3]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// Run starts a new session and attaches to it. This is the default path
+// for `clampdown <agent>` — start everything, then connect the terminal.
 func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options) error {
-	err := runPreflightChecks(ctx, rt)
+	sessionID, err := Start(ctx, rt, ag, opts)
 	if err != nil {
 		return err
+	}
+
+	return Attach(ctx, rt, sessionID, opts)
+}
+
+// Start creates all session containers (sidecar, proxy, agent) in detached
+// mode. Returns the session ID. All containers use --restart=unless-stopped.
+// On error mid-flow, partially created containers are cleaned up.
+//
+//nolint:gocognit,gocyclo,cyclop // Start orchestrates the full sandbox setup: sidecar, proxy, agent, firewall.
+func Start(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options) (string, error) {
+	err := runPreflightChecks(ctx, rt)
+	if err != nil {
+		return "", err
 	}
 
 	// Resolve workdir: if HOME, use scratch dir.
@@ -76,39 +101,39 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 		opts.Workdir = filepath.Join(os.TempDir(), AppName, "scratch")
 		err = os.MkdirAll(opts.Workdir, 0o750)
 		if err != nil {
-			return fmt.Errorf("create scratch dir: %w", err)
+			return "", fmt.Errorf("create scratch dir: %w", err)
 		}
 	}
 
 	p := GenPaths(rt.Name(), opts.Workdir)
 	err = EnsurePaths(p)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	rcEnv, err := LoadRC(opts.Workdir)
 	if err != nil {
-		return fmt.Errorf(".clampdownrc: %w", err)
+		return "", fmt.Errorf(".clampdownrc: %w", err)
 	}
 
 	sidecarSeccomp, agentSeccomp, err := seccomp.EnsureProfiles(DataDir)
 	if err != nil {
-		return fmt.Errorf("seccomp profiles: %w", err)
+		return "", fmt.Errorf("seccomp profiles: %w", err)
 	}
 
 	warnIfRootful(ctx, rt)
 
 	rt.CleanStale(ctx, containerPrefix)
 
-	pid := os.Getpid()
-	sidecarName := fmt.Sprintf("%s-%d-sidecar", containerPrefix, pid)
-	agentName := fmt.Sprintf("%s-%d-%s", containerPrefix, pid, ag.Name())
+	sessionID := generateSessionID()
+	sidecarName := fmt.Sprintf("%s-%s-sidecar", containerPrefix, sessionID)
+	agentName := fmt.Sprintf("%s-%s-%s", containerPrefix, sessionID, ag.Name())
 
 	// Write sandbox prompt to persistent HOME before building mounts so
 	// HOME-relative protected paths exist when ProtectMount runs.
 	err = WriteSandboxPrompt(ag, p.Home)
 	if err != nil {
-		return fmt.Errorf("sandbox prompt: %w", err)
+		return "", fmt.Errorf("sandbox prompt: %w", err)
 	}
 
 	// Build protection mounts (must happen before cleanup is defined).
@@ -145,7 +170,7 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 		for _, c := range created {
 			_ = os.RemoveAll(c)
 		}
-		return fmt.Errorf("build mounts: %w", err)
+		return "", fmt.Errorf("build mounts: %w", err)
 	}
 
 	// Ensure agent TMPDIR exists in persistent HOME (Bun extracts .so here).
@@ -155,44 +180,28 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 		_ = os.MkdirAll(filepath.Join(p.Home, rel), 0o750)
 	}
 
-	// Clean up per-session tool cache home created by nested containers.
-	created = append(created, filepath.Join(opts.Workdir, "."+ag.Name(), strconv.Itoa(pid)))
-
-	// runCtx is cancelled on SIGINT/SIGTERM or tripwire tamper detection.
-	// Cancelling it kills the podman process via exec.CommandContext,
-	// so cmd.Run() returns immediately instead of blocking.
-	runCtx, cancelRun := context.WithCancelCause(ctx)
-	defer cancelRun(nil)
+	// Per-session tool cache home created by nested containers.
+	created = append(created, filepath.Join(opts.Workdir, "."+ag.Name(), sessionID))
 
 	// Audit log: persists after containers are removed.
-	auditPath := filepath.Join(p.State, fmt.Sprintf("audit-%d.log", pid))
+	auditPath := filepath.Join(p.State, fmt.Sprintf("audit-%s.log", sessionID))
 	auditFile, auditErr := os.OpenFile(auditPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if auditErr != nil {
-		return fmt.Errorf("audit log: %w", auditErr)
+		return "", fmt.Errorf("audit log: %w", auditErr)
 	}
 	defer auditFile.Close()
-	auditf := func(format string, args ...any) {
-		ts := time.Now().UTC().Format(time.RFC3339)
-		body := fmt.Sprintf(format, args...)
-		fmt.Fprintf(auditFile, "clampdown: %s launcher: %s\n", ts, body)
-	}
 
-	// Host-side tripwire: monitors all read-only mount sources on the host
-	// via inotify. Snapshots files before launch, restores on exit.
-	// Any modification kills the session immediately.
-	// Enabled with --tripwire (off by default — false positives from
-	// IDE auto-save, multi-session, and external git operations).
-	var tw *tripwire.Tripwire
-	if opts.EnableTripwire {
-		var watchErr error
-		tw, watchErr = tripwire.Start(tripwire.HostPaths(mnts), func(path string) {
-			slog.Error("read-only path tampered", "path", path)
-			auditf("TAMPER path=%s", path)
-			cancelRun(fmt.Errorf("tampered: %s", path))
-		})
-		if watchErr != nil {
-			return fmt.Errorf("tripwire: %w", watchErr)
-		}
+	// Save session state for stop/delete.
+	state := SessionState{
+		ID:      sessionID,
+		Agent:   ag.Name(),
+		Workdir: opts.Workdir,
+		Created: created,
+		Audit:   auditPath,
+	}
+	err = saveSessionState(p.State, state)
+	if err != nil {
+		return "", fmt.Errorf("save session state: %w", err)
 	}
 
 	// Determine active proxy route (first matching key from host env + rcEnv).
@@ -206,44 +215,30 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 
 	proxyName := ""
 	if proxyRoute != nil {
-		proxyName = fmt.Sprintf("%s-%d-proxy", containerPrefix, pid)
+		proxyName = fmt.Sprintf("%s-%s-proxy", containerPrefix, sessionID)
 	}
 
-	var once sync.Once
-	sigCh := make(chan os.Signal, 1)
-	done := make(chan struct{})
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer func() {
-		signal.Stop(sigCh)
-		close(done)
-		// Stop the tripwire before cleanup so that cleanup's removal of
-		// DevNull placeholder files (paths that didn't exist at session start)
-		// doesn't fire a spurious "read-only path tampered" error.
-		if tw != nil {
-			tw.Stop()
+	// rollback removes partially created containers on startup failure.
+	rollback := func() {
+		names := []string{agentName}
+		if proxyName != "" {
+			names = append(names, proxyName)
 		}
-		cleanup(&once, rt, agentName, proxyName, sidecarName, created)
-	}()
-	go func() {
-		select {
-		case <-sigCh:
-			auditf("SIGNAL")
-			dumpAuditLogs(ctx, rt, auditFile, sidecarName, proxyName)
-			if tw != nil {
-				tw.Stop()
-			}
-			cleanup(&once, rt, agentName, proxyName, sidecarName, created)
-			os.Exit(1)
-		case <-done:
+		names = append(names, sidecarName)
+		_ = rt.Stop(context.Background(), names...)
+		_ = rt.Remove(context.Background(), names...)
+		for _, c := range created {
+			_ = os.RemoveAll(c)
 		}
-	}()
+		_ = os.Remove(sessionStatePath(p.State, sessionID))
+	}
 
-	sidecarCfg := sidecarConfig(sidecarName, pid, opts, p, sidecarSeccomp, ag, masked)
+	sidecarCfg := sidecarConfig(sidecarName, sessionID, opts, p, sidecarSeccomp, ag, masked)
 
 	// SSH agent forwarding requires a native runtime — Unix sockets
 	// cannot cross the VM boundary (virtiofs/9p don't support them).
 	if opts.SSH {
-		native, _ := rt.IsNative(runCtx)
+		native, _ := rt.IsNative(ctx)
 		if !native {
 			slog.Warn("--ssh: SSH agent forwarding is not supported" +
 				"on VM-based runtimes (colima, podman machine). Skipping.")
@@ -254,94 +249,248 @@ func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options
 	sidecarCfg.MaskedPaths = sidecarMasks
 
 	slog.Info("starting container sidecar")
-	err = rt.StartSidecar(runCtx, sidecarCfg)
+	err = rt.StartSidecar(ctx, sidecarCfg)
 	if err != nil {
-		return fmt.Errorf("start sidecar: %w", err)
+		rollback()
+		return "", fmt.Errorf("start sidecar: %w", err)
 	}
 
 	slog.Info("waiting for container API")
-	err = waitReady(runCtx, rt, sidecarName)
+	err = waitReady(ctx, rt, sidecarName)
 	if err != nil {
 		logs, _ := rt.Logs(ctx, sidecarName)
 		if len(logs) > 0 {
 			slog.Error("sidecar logs", "output", string(logs))
 		}
-		return err
+		rollback()
+		return "", err
 	}
 	slog.Info("container API ready")
 
-	_ = rt.Log(runCtx, sidecarName, "session",
-		fmt.Sprintf("START agent=%s workdir=%s pid=%d", ag.Name(), opts.Workdir, pid))
+	_ = rt.Log(ctx, sidecarName, "session",
+		fmt.Sprintf("START agent=%s workdir=%s session=%s", ag.Name(), opts.Workdir, sessionID))
 
 	// Build the full firewall ruleset now that the sidecar API is up.
 	// The entrypoint set a deny-all baseline; we add the agent allowlist
 	// and pod chains before any untrusted code starts.
 	allowIPs := agentAllowIPs(ag, opts.AgentAllow)
-	err = network.BuildAgentFirewall(runCtx, rt, sidecarName, opts.AgentPolicy, allowIPs)
+	err = network.BuildAgentFirewall(ctx, rt, sidecarName, opts.AgentPolicy, allowIPs)
 	if err != nil {
-		return fmt.Errorf("agent firewall: %w", err)
+		rollback()
+		return "", fmt.Errorf("agent firewall: %w", err)
 	}
-	err = network.BuildPodFirewall(runCtx, rt, sidecarName, opts.PodPolicy)
+	err = network.BuildPodFirewall(ctx, rt, sidecarName, opts.PodPolicy)
 	if err != nil {
-		return fmt.Errorf("pod firewall: %w", err)
+		rollback()
+		return "", fmt.Errorf("pod firewall: %w", err)
 	}
 	err = network.InitState(filepath.Join(p.State, "firewall.json"))
 	if err != nil {
-		return fmt.Errorf("init firewall state: %w", err)
+		rollback()
+		return "", fmt.Errorf("init firewall state: %w", err)
 	}
 
 	// Start auth proxy if a proxy route is active.
 	if proxyRoute != nil {
 		proxyCfg := ProxyConfig(
-			proxyName, sidecarName, pid, opts,
+			proxyName, sidecarName, sessionID, opts,
 			ag, proxyRoute, agentSeccomp, rcEnv,
 		)
 		slog.Info("starting auth proxy", "upstream", proxyRoute.Upstream)
-		err = rt.StartProxy(runCtx, proxyCfg)
+		err = rt.StartProxy(ctx, proxyCfg)
 		if err != nil {
-			return fmt.Errorf("start proxy: %w", err)
+			rollback()
+			return "", fmt.Errorf("start proxy: %w", err)
 		}
 
-		err = waitProxyReady(runCtx, rt, proxyName)
+		err = waitProxyReady(ctx, rt, proxyName)
 		if err != nil {
 			logs, _ := rt.Logs(ctx, proxyName)
 			if len(logs) > 0 {
 				slog.Error("proxy logs", "output", string(logs))
 			}
-			return err
+			rollback()
+			return "", err
 		}
 		slog.Info("auth proxy ready")
 	}
 
 	agentCfg := agentConfig(
-		agentName, sidecarName, pid, opts,
+		agentName, sidecarName, sessionID, opts,
 		ag, mnts, agentSeccomp,
 		p.Home, proxyRoute,
 	)
 
-	err = rt.StartAgent(runCtx, agentCfg)
-
-	// Log session end before cleanup removes the sidecar.
-	cause := context.Cause(runCtx)
-	if cause != nil {
-		_ = rt.Log(ctx, sidecarName, "session",
-			fmt.Sprintf("STOP reason=tamper cause=%v", cause))
-	} else {
-		_ = rt.Log(ctx, sidecarName, "session", "STOP reason=agent-exit")
+	slog.Info("starting agent", "name", ag.Name())
+	err = rt.StartAgent(ctx, agentCfg)
+	if err != nil {
+		rollback()
+		return "", fmt.Errorf("start agent: %w", err)
 	}
 
-	// Dump container logs to audit file before cleanup removes them.
-	// Signal path already dumped and exited via os.Exit(1).
-	dumpAuditLogs(ctx, rt, auditFile, sidecarName, proxyName)
+	slog.Info("session started", "session", sessionID)
+	return sessionID, nil
+}
 
-	// If the context was cancelled by the watcher, the agent was killed
-	// due to tamper detection. Return a specific error so the caller
-	// knows this wasn't a normal exit. The deferred cleanup runs after
-	// this return: containers removed, permissions restored.
-	if cause != nil {
-		return errTamper
+// Attach connects the terminal to a running agent container. Blocks until
+// the user detaches (ctrl-]) or the container exits. Does not clean up
+// the session on return — the session persists for reattach or stop.
+func Attach(ctx context.Context, rt container.Runtime, sessionID string, opts Options) error {
+	agentName, running, err := findAgentState(ctx, rt, sessionID)
+	if err != nil {
+		return err
 	}
+	if !running {
+		return fmt.Errorf("agent container %s is not running — use 'stop' or 'delete'", agentName)
+	}
+
+	// Host-side tripwire: monitors read-only mount sources via inotify.
+	// Only active while attached (acceptable — tripwire is opt-in).
+	var tw *tripwire.Tripwire
+	if opts.EnableTripwire {
+		p := GenPaths(rt.Name(), opts.Workdir)
+		mnts, _, _ := mounts.Build(opts.Workdir, p.Home, Home, nil, nil, nil)
+		var watchErr error
+		tw, watchErr = tripwire.Start(tripwire.HostPaths(mnts), func(path string) {
+			slog.Error("read-only path tampered", "path", path)
+		})
+		if watchErr != nil {
+			slog.Warn("tripwire failed to start", "error", watchErr)
+		}
+	}
+
+	slog.Info("attaching to session (detach: ctrl+])", "session", sessionID)
+	err = rt.AttachAgent(ctx, agentName)
+
+	if tw != nil {
+		tw.Stop()
+	}
+
 	return err
+}
+
+// DumpSessionAudit writes container logs to the session's audit file.
+func DumpSessionAudit(ctx context.Context, rt container.Runtime, sessionID string) {
+	state, err := LoadSessionState(ctx, rt, sessionID)
+	if err != nil {
+		return
+	}
+
+	auditFile, err := os.OpenFile(state.Audit, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	defer auditFile.Close()
+
+	sidecar, proxy := "", ""
+	infos, _ := rt.List(ctx, map[string]string{
+		"clampdown":         AppName,
+		"clampdown.session": sessionID,
+	})
+	for _, info := range infos {
+		switch info.Labels["clampdown.role"] {
+		case "sidecar":
+			sidecar = info.Name
+		case "proxy":
+			proxy = info.Name
+		}
+	}
+	if sidecar == "" {
+		return
+	}
+
+	dumpAuditLogs(ctx, rt, auditFile, sidecar, proxy)
+}
+
+// LoadSessionState reads the session state file for a given session.
+// It discovers the state directory from the session's workdir label.
+func LoadSessionState(ctx context.Context, rt container.Runtime, sessionID string) (*SessionState, error) {
+	workdir, err := sessionWorkdir(ctx, rt, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	p := GenPaths(rt.Name(), workdir)
+	return loadSessionState(p.State, sessionID)
+}
+
+func sessionStatePath(stateDir, sessionID string) string {
+	return filepath.Join(stateDir, fmt.Sprintf("session-%s.json", sessionID))
+}
+
+func saveSessionState(stateDir string, state SessionState) error {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(sessionStatePath(stateDir, state.ID), data, 0o600)
+}
+
+func loadSessionState(stateDir, sessionID string) (*SessionState, error) {
+	data, err := os.ReadFile(sessionStatePath(stateDir, sessionID))
+	if err != nil {
+		return nil, err
+	}
+	var state SessionState
+	err = json.Unmarshal(data, &state)
+	if err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+// CleanupSessionFiles removes temp files and the session state file.
+// Called by delete after containers have been removed.
+func CleanupSessionFiles(ctx context.Context, rt container.Runtime, sessionID string) {
+	state, err := LoadSessionState(ctx, rt, sessionID)
+	if err != nil {
+		return
+	}
+
+	for _, c := range state.Created {
+		_ = os.RemoveAll(c)
+	}
+
+	workdir, wErr := sessionWorkdir(ctx, rt, sessionID)
+	if wErr == nil {
+		p := GenPaths(rt.Name(), workdir)
+		_ = os.Remove(sessionStatePath(p.State, sessionID))
+	}
+}
+
+// findAgentState returns the agent container name and whether it's running.
+func findAgentState(ctx context.Context, rt container.Runtime, sessionID string) (string, bool, error) {
+	infos, err := rt.List(ctx, map[string]string{
+		"clampdown":         AppName,
+		"clampdown.session": sessionID,
+	})
+	if err != nil {
+		return "", false, err
+	}
+	for _, info := range infos {
+		role := info.Labels["clampdown.role"]
+		if role != "sidecar" && role != "proxy" {
+			return info.Name, info.State == "running", nil
+		}
+	}
+	return "", false, fmt.Errorf("no agent found for session %s", sessionID)
+}
+
+// sessionWorkdir extracts the workdir from a session's container labels.
+func sessionWorkdir(ctx context.Context, rt container.Runtime, sessionID string) (string, error) {
+	infos, err := rt.List(ctx, map[string]string{
+		"clampdown":         AppName,
+		"clampdown.session": sessionID,
+	})
+	if err != nil {
+		return "", err
+	}
+	for _, info := range infos {
+		if w := info.Labels["clampdown.workdir"]; w != "" {
+			return w, nil
+		}
+	}
+	return "", fmt.Errorf("cannot determine workdir for session %s", sessionID)
 }
 
 func waitReady(ctx context.Context, rt container.Runtime, sidecar string) error {
@@ -355,22 +504,6 @@ func waitReady(ctx context.Context, rt container.Runtime, sidecar string) error 
 		time.Sleep(time.Second)
 	}
 	return fmt.Errorf("sidecar did not become ready within %ds", readinessTimeout)
-}
-
-func cleanup(once *sync.Once, rt container.Runtime, agentName, proxyName, sidecar string, created []string) {
-	once.Do(func() {
-		// Stop order: agent → proxy → sidecar.
-		// Agent depends on sidecar's network namespace; proxy does too.
-		names := []string{agentName}
-		if proxyName != "" {
-			names = append(names, proxyName)
-		}
-		names = append(names, sidecar)
-		_ = rt.Stop(context.Background(), names...)
-		for _, p := range created {
-			_ = os.RemoveAll(p)
-		}
-	})
 }
 
 var proxyReadyRe = regexp.MustCompile("proxy:.*ready")

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Podman implements Runtime for podman.
@@ -126,6 +127,7 @@ func (p *Podman) StartSidecar(ctx context.Context, cfg SidecarContainerConfig) e
 
 func (p *Podman) StartProxy(ctx context.Context, cfg ProxyContainerConfig) error {
 	args := []string{"run", "-d", "--name", cfg.Name,
+		"--restart=unless-stopped",
 		"--userns=keep-id",
 		"--network", "container:" + cfg.SidecarName,
 		"--cap-drop=ALL",
@@ -164,8 +166,26 @@ func (p *Podman) StartProxy(ctx context.Context, cfg ProxyContainerConfig) error
 	return cmd.Run()
 }
 
+func (p *Podman) AttachAgent(ctx context.Context, name string) error {
+	cmd := p.command(ctx, "attach", "--detach-keys=ctrl-]", name)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	slog.Debug("exec", "cmd", cmd.Args)
+	err := cmd.Start()
+	if err != nil {
+		return err
+	}
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		NudgeTerminal()
+	}()
+	return cmd.Wait()
+}
+
 func (p *Podman) StartAgent(ctx context.Context, cfg AgentContainerConfig) error {
-	args := []string{"run", "--rm", "-ti", "--name", cfg.Name,
+	args := []string{"run", "-d", "-ti", "--name", cfg.Name,
+		"--restart=unless-stopped",
 		"--userns=keep-id",
 		"--network", "container:" + cfg.SidecarName,
 		"--cap-drop=ALL",
@@ -214,7 +234,6 @@ func (p *Podman) StartAgent(ctx context.Context, cfg AgentContainerConfig) error
 	args = append(args, cfg.EntrypointArgs...)
 
 	cmd := p.command(ctx, args...)
-	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	slog.Debug("exec", "cmd", cmd.Args)

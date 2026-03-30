@@ -41,20 +41,20 @@ type LandlockPolicy struct {
 	BindTCP     []uint16 `json:"bind_tcp,omitempty"`
 }
 
-func labels(session int, role string, ag agent.Agent, opts Options) map[string]string {
+func labels(session string, role string, ag agent.Agent, opts Options) map[string]string {
 	return map[string]string{
 		"clampdown":              AppName,
 		"clampdown.agent":        ag.Name(),
 		"clampdown.agent_policy": opts.AgentPolicy,
 		"clampdown.pod_policy":   opts.PodPolicy,
 		"clampdown.role":         role,
-		"clampdown.session":      strconv.Itoa(session),
+		"clampdown.session":      session,
 		"clampdown.workdir":      opts.Workdir,
 	}
 }
 
 func sidecarConfig(
-	name string, session int, opts Options, p ProjectPaths,
+	name string, session string, opts Options, p ProjectPaths,
 	seccompPath string, ag agent.Agent, masked []agent.MaskedPath,
 ) container.SidecarContainerConfig {
 	var authFile string
@@ -103,7 +103,7 @@ func sidecarConfig(
 }
 
 func agentConfig(
-	name, sidecarName string, session int, opts Options,
+	name, sidecarName string, session string, opts Options,
 	ag agent.Agent,
 	mounts []container.MountSpec, seccompPath string,
 	homeDir string, route *agent.ProxyRoute,
@@ -148,9 +148,9 @@ func agentConfig(
 			"CONTAINER_HOST":  container.SidecarAPI,
 			"DOCKER_HOST":     container.SidecarAPI,
 			"HOME":            Home,
-			"SANDBOX_CACHE":   filepath.Join(opts.Workdir, "."+ag.Name(), strconv.Itoa(session)),
+			"SANDBOX_CACHE":   filepath.Join(opts.Workdir, "."+ag.Name(), session),
 			"SANDBOX_POLICY":  policyJSON,
-			"SANDBOX_SESSION": strconv.Itoa(session),
+			"SANDBOX_SESSION": session,
 			"TERM":            os.Getenv("TERM"),
 		}, ag.Env(), keyEnv),
 		Tmpfs:          tmpfs,
@@ -406,7 +406,7 @@ func ActiveProxyRoute(ag agent.Agent, rcEnv map[string]string) *agent.ProxyRoute
 // ProxyConfig builds the container config for the auth proxy.
 // The route configuration and API key are passed as individual env vars.
 func ProxyConfig(
-	name, sidecarName string, session int, opts Options,
+	name, sidecarName string, session string, opts Options,
 	ag agent.Agent, route *agent.ProxyRoute, seccompPath string,
 	rcEnv map[string]string,
 ) container.ProxyContainerConfig {

@@ -89,7 +89,7 @@
 │  │  Seccomp: workload profile (~133 blocked)                        │    │
 │  │  Landlock: ReadOnly:[/], ReadExec:[/usr/local/bin]               │    │
 │  │           ConnectTCP:[443, 53]                                   │    │
-│  │  cap-drop=ALL, ulimit core=0:0, 128m, 16 PIDs                    │    │
+│  │  cap-drop=ALL, ulimit core=0:0, 128m, 512 PIDs                   │    │
 │  │  No workdir, no HOME, no devices, no shell                       │    │
 │  └──────────────────────────────────────────────────────────────────┘    │
 │                                                                          │
@@ -291,12 +291,22 @@ handle notifications).
 Once the sidecar's podman API responds, the launcher checks whether an
 API key is available (from the host environment or .clampdownrc). If a
 key is found, the auth proxy starts in detached mode. The launcher waits
-for the "proxy: ready" log line, then starts the agent interactively.
+for the "proxy: ready" log line, then starts the agent in detached mode.
 If no key is found, the agent starts without a proxy and a warning is
 printed.
 
-When the agent exits, all containers are removed in order: agent first,
-then proxy, then sidecar.
+All three containers (sidecar, proxy, agent) run with
+`--restart=unless-stopped` -- they persist across terminal disconnects
+and restart automatically on crash. The launcher then attaches to the
+agent container (`podman attach --detach-keys=ctrl-]`). The user can
+detach with `ctrl+]` and reattach later with `clampdown attach -s <id>`.
+
+Sessions are identified by a 6-character random hex ID (not the
+launcher PID). Session state is persisted to `$STATE/session-<id>.json`
+for stop/delete operations.
+
+`clampdown stop` stops all containers for a session.
+`clampdown delete` removes stopped containers and cleans up temp files.
 
 ### API key isolation
 
@@ -465,8 +475,9 @@ modified files and removes unexpected ones.
 This is the last defense layer. The sidecar's UID mapping prevents
 writes (container uid 0 maps to a sub-UID that doesn't own the files),
 but a full escape to the host user would bypass in-container protections.
-The tripwire runs outside all namespaces and catches that. Disabled with
-`--disable-tripwire`.
+The tripwire runs outside all namespaces and catches that. Enabled with
+`--tripwire` (off by default). The tripwire is active only while the
+launcher is attached to the session.
 
 ### Audit trail
 
@@ -624,6 +635,6 @@ Base images pinned by SHA256 digest.
 | Sidecar | /sandbox-seal | Go, static (go-landlock, x/sys, psx) |
 | Sidecar | /rename_exdev_shim.so | C, musl -nostdlib |
 | Sidecar | seal-inject, security-policy | Go, static, stdlib only |
-| Sidecar | /usr/local/bin/podman | podman-static v5.8.0 |
+| Sidecar | /usr/local/bin/podman | podman-static v5.8.1 |
 | Proxy | /usr/local/bin/auth-proxy | Go, static, stdlib only |
 | Proxy | ca-certificates.crt | Alpine CA bundle |

@@ -92,10 +92,80 @@ func FindSidecar(ctx context.Context, rt container.Runtime, sessionID string) (s
 			return c.Name, nil
 		}
 	}
-	return "", fmt.Errorf("no running session %s found", sessionID)
+	return "", fmt.Errorf("no sidecar found for session %s", sessionID)
 }
 
-// Delete stops and removes all containers for a session.
+// FindAgent resolves a session ID to an agent container name.
+func FindAgent(ctx context.Context, rt container.Runtime, sessionID string) (string, error) {
+	ctrs, err := FindContainers(ctx, rt, sessionID)
+	if err != nil {
+		return "", err
+	}
+	for _, c := range ctrs {
+		if c.Role != "sidecar" && c.Role != "proxy" {
+			return c.Name, nil
+		}
+	}
+	return "", fmt.Errorf("no agent found for session %s", sessionID)
+}
+
+// IsRunning checks if a specific container is in running state.
+func IsRunning(ctx context.Context, rt container.Runtime, sessionID, name string) (bool, error) {
+	infos, err := rt.List(ctx, map[string]string{
+		"clampdown":         sandbox.AppName,
+		"clampdown.session": sessionID,
+	})
+	if err != nil {
+		return false, err
+	}
+	for _, info := range infos {
+		if info.Name == name {
+			return info.State == "running", nil
+		}
+	}
+	return false, nil
+}
+
+// Stop stops all containers for a session (agent → proxy → sidecar).
+func Stop(ctx context.Context, rt container.Runtime, sessionID string) error {
+	infos, err := rt.List(ctx, map[string]string{
+		"clampdown":         sandbox.AppName,
+		"clampdown.session": sessionID,
+	})
+	if err != nil {
+		return err
+	}
+	if len(infos) == 0 {
+		return fmt.Errorf("no containers found for session %s", sessionID)
+	}
+
+	// Stop order: agents → proxies → sidecars.
+	var agents, proxies, sidecars []string
+	for _, info := range infos {
+		switch info.Labels["clampdown.role"] {
+		case "sidecar":
+			sidecars = append(sidecars, info.Name)
+		case "proxy":
+			proxies = append(proxies, info.Name)
+		default:
+			agents = append(agents, info.Name)
+		}
+	}
+
+	var all []string
+	all = append(all, agents...)
+	all = append(all, proxies...)
+	all = append(all, sidecars...)
+	err = rt.Stop(ctx, all...)
+	if err != nil {
+		return fmt.Errorf("stop containers: %w", err)
+	}
+	slog.Info("stopped session containers", "count", len(all), "session", sessionID)
+	return nil
+}
+
+// Delete removes all stopped containers for a session. Returns an error
+// if any container is still running.
 func Delete(ctx context.Context, rt container.Runtime, sessionID string) error {
 	infos, err := rt.List(ctx, map[string]string{
 		"clampdown":         sandbox.AppName,

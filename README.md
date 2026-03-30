@@ -402,11 +402,28 @@ clampdown claude --tripwire
 
 ## Session management
 
+All containers run detached. `clampdown claude` starts a session and attaches
+to it. Detach with `ctrl+]` — the session keeps running in the background.
+All containers use `--restart=unless-stopped`: if the agent crashes, it
+restarts automatically. Only `clampdown stop` stops a session.
+
 ```sh
-# List all running sessions
+# Start a session and attach (default workflow)
+clampdown claude
+
+# Detach: press ctrl+]
+# The session keeps running. The launcher exits.
+
+# List all sessions (running and stopped)
 clampdown list
 
-# Stop a session and clean up its containers
+# Reattach to a running session
+clampdown attach -s <session-id>
+
+# Stop a running session (all containers)
+clampdown stop -s <session-id>
+
+# Remove a stopped session's containers and temp files
 clampdown delete -s <session-id>
 
 # View audit events from a session (merged, sorted)

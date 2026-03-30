@@ -181,8 +181,20 @@ func Run(args []string) error {
 				Action: listSessions,
 			},
 			&ucli.Command{
+				Name:   "attach",
+				Usage:  "Attach to a running sandbox session",
+				Flags:  []ucli.Flag{sessionFlag()},
+				Action: attachSession,
+			},
+			&ucli.Command{
+				Name:   "stop",
+				Usage:  "Stop a running sandbox session",
+				Flags:  []ucli.Flag{sessionFlag()},
+				Action: stopSession,
+			},
+			&ucli.Command{
 				Name:   "delete",
-				Usage:  "Stop a session and remove its containers and cache",
+				Usage:  "Remove a stopped session's containers and cache",
 				Flags:  []ucli.Flag{sessionFlag()},
 				Action: deleteSession,
 			},
@@ -402,12 +414,41 @@ func listSessions(ctx context.Context, cmd *ucli.Command) error {
 	return nil
 }
 
+func attachSession(ctx context.Context, cmd *ucli.Command) error {
+	rt, err := resolveRuntime(cmd)
+	if err != nil {
+		return err
+	}
+
+	opts := sandbox.Options{
+		EnableTripwire: cmd.Bool("tripwire"),
+		Workdir:        cmd.String("workdir"),
+	}
+	if opts.Workdir == "" {
+		opts.Workdir, _ = os.Getwd()
+	}
+
+	return sandbox.Attach(ctx, rt, cmd.String("session"), opts)
+}
+
+func stopSession(ctx context.Context, cmd *ucli.Command) error {
+	rt, err := resolveRuntime(cmd)
+	if err != nil {
+		return err
+	}
+	sessionID := cmd.String("session")
+	sandbox.DumpSessionAudit(ctx, rt, sessionID)
+	return session.Stop(ctx, rt, sessionID)
+}
+
 func deleteSession(ctx context.Context, cmd *ucli.Command) error {
 	rt, err := resolveRuntime(cmd)
 	if err != nil {
 		return err
 	}
-	return session.Delete(ctx, rt, cmd.String("session"))
+	sessionID := cmd.String("session")
+	sandbox.CleanupSessionFiles(ctx, rt, sessionID)
+	return session.Delete(ctx, rt, sessionID)
 }
 
 func showLogs(ctx context.Context, cmd *ucli.Command) error {

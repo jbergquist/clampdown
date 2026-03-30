@@ -174,6 +174,7 @@ func (d *Docker) StartSidecar(ctx context.Context, cfg SidecarContainerConfig) e
 
 func (d *Docker) StartProxy(ctx context.Context, cfg ProxyContainerConfig) error {
 	args := []string{"run", "-d", "--name", cfg.Name,
+		"--restart=unless-stopped",
 		"--user", d.uid() + ":" + d.gid(),
 		"--network", "container:" + cfg.SidecarName,
 		"--cap-drop=ALL",
@@ -210,11 +211,29 @@ func (d *Docker) StartProxy(ctx context.Context, cfg ProxyContainerConfig) error
 	return cmd.Run()
 }
 
+func (d *Docker) AttachAgent(ctx context.Context, name string) error {
+	cmd := d.command(ctx, "attach", "--detach-keys=ctrl-]", name)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	slog.Debug("exec", "cmd", cmd.Args)
+	err := cmd.Start()
+	if err != nil {
+		return err
+	}
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		NudgeTerminal()
+	}()
+	return cmd.Wait()
+}
+
 func (d *Docker) StartAgent(ctx context.Context, cfg AgentContainerConfig) error {
 	uid, gid := d.uid(), d.gid()
 	uidGID := uid + ":" + gid
 
-	args := []string{"run", "--rm", "-ti", "--name", cfg.Name,
+	args := []string{"run", "-d", "-ti", "--name", cfg.Name,
+		"--restart=unless-stopped",
 		"--user", uidGID,
 		"--network", "container:" + cfg.SidecarName,
 		"--cap-drop=ALL",
@@ -265,7 +284,6 @@ func (d *Docker) StartAgent(ctx context.Context, cfg AgentContainerConfig) error
 	args = append(args, cfg.EntrypointArgs...)
 
 	cmd := d.command(ctx, args...)
-	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	slog.Debug("exec", "cmd", cmd.Args)

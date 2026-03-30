@@ -4,6 +4,10 @@ package container
 
 import (
 	"context"
+	"os"
+	"syscall"
+	"time"
+	"unsafe"
 )
 
 // SidecarAPI is the endpoint where the sidecar's podman service listens.
@@ -27,6 +31,7 @@ type Runtime interface {
 	Remove(ctx context.Context, names ...string) error
 	SetDebug(bool)
 	Stop(ctx context.Context, names ...string) error
+	AttachAgent(ctx context.Context, name string) error
 	StartAgent(ctx context.Context, cfg AgentContainerConfig) error
 	StartProxy(ctx context.Context, cfg ProxyContainerConfig) error
 	StartSidecar(ctx context.Context, cfg SidecarContainerConfig) error
@@ -145,4 +150,30 @@ type TmpfsSpec struct {
 	NoSuid bool
 	Path   string
 	Size   string
+}
+
+type winsize struct {
+	Row    uint16
+	Col    uint16
+	Xpixel uint16
+	Ypixel uint16
+}
+
+// NudgeTerminal briefly changes the terminal size by one column, then
+// restores it, forcing the TUI to repaint.
+func NudgeTerminal() {
+	fd := os.Stdin.Fd()
+	var ws winsize
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCGWINSZ, uintptr(unsafe.Pointer(&ws)))
+	if errno != 0 {
+		return
+	}
+	ws.Col--
+	_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCSWINSZ, uintptr(unsafe.Pointer(&ws)))
+	if errno != 0 {
+		return
+	}
+	time.Sleep(50 * time.Millisecond)
+	ws.Col++
+	_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCSWINSZ, uintptr(unsafe.Pointer(&ws)))
 }
