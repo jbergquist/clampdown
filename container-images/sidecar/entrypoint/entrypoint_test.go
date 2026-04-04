@@ -451,3 +451,65 @@ func TestReadPPID_Missing(t *testing.T) {
 		t.Errorf("expected 0 for nonexistent PID, got %d", ppid)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Bind mount source allowlist tests
+// ---------------------------------------------------------------------------
+
+func TestIsAllowedBindSource(t *testing.T) {
+	workdir := "/home/user/project"
+	tests := []struct {
+		source string
+		want   bool
+	}{
+		// Workdir and children.
+		{"/home/user/project", true},
+		{"/home/user/project/src", true},
+		{"/home/user/project/.git/hooks", true},
+
+		// Infrastructure storage.
+		{"/var/lib/containers/storage/overlay/abc/merged", true},
+		{"/var/run/containers/storage/abc", true},
+		{"/var/cache/containers/blob-cache/sha256/abc", true},
+		{"/run/containers/storage/abc", true},
+		{"/run/credentials/gh", true},
+
+		// Device files.
+		{"/dev/null", true},
+		{"/dev/zero", true},
+		{"/dev/shm/foo", false},
+
+		// Temp dirs.
+		{"/tmp/buildah123", false},
+		{"/var/tmp/foo", false},
+
+		// Special rootfs files.
+		{"/sandbox-seal", true},
+		{"/rename_exdev_shim.so", true},
+		{"/empty", true},
+
+		// Empty source (remount).
+		{"", true},
+
+		// ATTACK: rootfs paths that must be blocked.
+		{"/", false},
+		{"/etc", false},
+		{"/etc/containers", false},
+		{"/etc/containers/containers.conf", false},
+		{"/usr", false},
+		{"/usr/share/containers/oci/hooks.d", false},
+		{"/usr/libexec/oci/hooks.d/security-policy", false},
+		{"/bin", false},
+		{"/home/user", false}, // parent of workdir, not under it
+		{"/proc", false},
+		{"/sys", false},
+		{"/opt", false},
+		{"/entrypoint", false},
+	}
+	for _, tt := range tests {
+		got := isAllowedBindSource(tt.source, workdir)
+		if got != tt.want {
+			t.Errorf("isAllowedBindSource(%q, %q) = %v, want %v", tt.source, workdir, got, tt.want)
+		}
+	}
+}

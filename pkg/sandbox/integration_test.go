@@ -1197,6 +1197,150 @@ func TestSupervisor(t *testing.T) {
 	})
 }
 
+// ---------------------------------------------------------------------------
+// Rootfs tampering: pentest escape chain — bind mount source allowlist.
+// Validates that the seccomp-notif supervisor blocks the attack at the
+// mount level, preventing access to sidecar config via -v /:/hostroot.
+// Build containers skip OCI hooks; the supervisor is the only defense.
+// ---------------------------------------------------------------------------
+
+func TestRootfsTampering(t *testing.T) {
+	t.Parallel()
+
+	t.Run("run_bind_root_blocked", func(t *testing.T) {
+		t.Parallel()
+		// podman run -v /:/hostroot — exposes entire sidecar rootfs.
+		// The supervisor's bind source check must reject source "/".
+		out, err := sidecarExec(t, sidecarName,
+			innerRun([]string{"-v", "/:/hostroot"}, "cat", "/hostroot/etc/containers/containers.conf"))
+		requireFail(t, out, err)
+	})
+
+	t.Run("run_bind_etc_blocked", func(t *testing.T) {
+		t.Parallel()
+		// podman run -v /etc:/hostetc — exposes sidecar config dir.
+		out, err := sidecarExec(t, sidecarName,
+			innerRun([]string{"-v", "/etc:/hostetc"}, "cat", "/hostetc/containers/containers.conf"))
+		requireFail(t, out, err)
+	})
+
+	t.Run("run_bind_usr_blocked", func(t *testing.T) {
+		t.Parallel()
+		// podman run -v /usr:/hostusr — exposes hook binaries/configs.
+		out, err := sidecarExec(t, sidecarName,
+			innerRun([]string{"-v", "/usr:/hostusr"}, "ls", "/hostusr/share/containers"))
+		requireFail(t, out, err)
+	})
+
+	t.Run("build_escalate_full_chain", func(t *testing.T) {
+		t.Parallel()
+		containerfile := strings.Join([]string{
+			"FROM " + alpineImage,
+			"RUN ls -la /hostroot/usr/share/containers/oci/hooks.d/security-policy.json /hostroot/usr/share/containers/oci/hooks.d/seal-inject.json",
+			"RUN cat /hostroot/usr/share/containers/oci/hooks.d/security-policy.json /hostroot/usr/share/containers/oci/hooks.d/seal-inject.json",
+			"RUN rm -f /hostroot/usr/share/containers/oci/hooks.d/security-policy.json /hostroot/usr/share/containers/oci/hooks.d/seal-inject.json",
+			"",
+		}, "\n")
+		cfPath := filepath.Join(workdir, "Containerfile.escalate")
+		if err := os.WriteFile(cfPath, []byte(containerfile), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(cfPath)
+		out, err := sidecarExecTimeout(t, sidecarName, []string{
+			innerPodman, "build", "--no-cache",
+			"--cap-add", "ALL",
+			"-v", "/:/hostroot",
+			"-f", cfPath, workdir,
+		}, 120*time.Second)
+		requireFail(t, out, err)
+	})
+
+	t.Run("build_bind_root_delete_hooks", func(t *testing.T) {
+		t.Parallel()
+		cfPath := filepath.Join(workdir, "Containerfile.delete_hooks")
+		cf := "FROM " + alpineImage + "\nRUN rm -f /hostroot/usr/share/containers/oci/hooks.d/security-policy.json\n"
+		if err := os.WriteFile(cfPath, []byte(cf), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(cfPath)
+		out, err := sidecarExecTimeout(t, sidecarName, []string{
+			innerPodman, "build", "--no-cache",
+			"-v", "/:/hostroot",
+			"-f", cfPath, workdir,
+		}, 120*time.Second)
+		requireFail(t, out, err)
+	})
+
+	t.Run("build_bind_root_overwrite_seccomp", func(t *testing.T) {
+		t.Parallel()
+		// Overwrite seccomp_nested.json to weaken nested container restrictions.
+		cfPath := filepath.Join(workdir, "Containerfile.overwrite_seccomp")
+		cf := "FROM " + alpineImage + "\nRUN echo '{}' > /hostroot/etc/containers/seccomp_nested.json\n"
+		if err := os.WriteFile(cfPath, []byte(cf), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(cfPath)
+		out, err := sidecarExecTimeout(t, sidecarName, []string{
+			innerPodman, "build", "--no-cache",
+			"-v", "/:/hostroot",
+			"-f", cfPath, workdir,
+		}, 120*time.Second)
+		requireFail(t, out, err)
+	})
+
+	t.Run("build_bind_root_modify_containers_conf", func(t *testing.T) {
+		t.Parallel()
+		// Modify containers.conf to disable security defaults.
+		cfPath := filepath.Join(workdir, "Containerfile.modify_conf")
+		cf := "FROM " + alpineImage + "\nRUN echo '[containers]' > /hostroot/etc/containers/containers.conf\n"
+		if err := os.WriteFile(cfPath, []byte(cf), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(cfPath)
+		out, err := sidecarExecTimeout(t, sidecarName, []string{
+			innerPodman, "build", "--no-cache",
+			"-v", "/:/hostroot",
+			"-f", cfPath, workdir,
+		}, 120*time.Second)
+		requireFail(t, out, err)
+	})
+
+	t.Run("run_bind_etc_containers_blocked", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun([]string{"-v", "/etc/containers:/mnt"}, "cat", "/mnt/containers.conf"))
+		requireFail(t, out, err)
+	})
+
+	t.Run("run_bind_hook_dir_blocked", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun([]string{"-v", "/usr/share/containers/oci/hooks.d:/mnt"}, "ls", "/mnt"))
+		requireFail(t, out, err)
+	})
+
+	t.Run("run_bind_hook_binary_blocked", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun([]string{"-v", "/usr/libexec/oci/hooks.d/security-policy:/mnt/sp"}, "ls", "/mnt/sp"))
+		requireFail(t, out, err)
+	})
+
+	t.Run("run_bind_dev_fuse_blocked", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun([]string{"-v", "/dev/fuse:/dev/fuse"}, "ls", "/dev/fuse"))
+		requireFail(t, out, err)
+	})
+
+	t.Run("run_workdir_mount_allowed", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun([]string{"-v", workdir + ":/work"}, "ls", "/work"))
+		requireSuccess(t, out, err)
+	})
+}
+
 func TestSecurityAudit(t *testing.T) {
 	t.Run("cdk", func(t *testing.T) {
 		// Detect architecture for the correct CDK binary.

@@ -21,21 +21,73 @@ import (
 // (IPT_SO_SET_REPLACE) and IPv6 (IP6T_SO_SET_REPLACE).
 const iptSOSetReplace = 64
 
+// allowedBindSources lists path prefixes from which bind mount sources
+// are permitted.
+var allowedBindSources = []string{
+	// infra mounts for namespace setup
+	"/proc/self",
+	"/proc/thread-self",
+	"/run/user/0",
+	"/run/netns",
+	"/dev/char",
+	"/dev/pts",
+	// infra mounts for container storage, cache, logs
+	"/run/containers",
+	"/var/cache/containers",
+	"/var/lib/containers/storage",
+	"/var/run/containers/storage",
+	// credential forwarding
+	"/run/credentials",
+}
+
+// allowedBindSourceFiles lists individual rootfs files that may be
+// bind-mounted into nested containers.
+var allowedBindSourceFiles = []string{
+	"/dev/full",
+	"/dev/null",
+	"/dev/random",
+	"/dev/tty",
+	"/dev/urandom",
+	"/dev/zero",
+	"/empty",
+	"/rename_exdev_shim.so",
+	"/sandbox-seal",
+}
+
+// isAllowedBindSource checks whether a bind mount source is permitted.
+func isAllowedBindSource(source, workdir string) bool {
+	if source == "" {
+		return true
+	}
+
+	if workdir != "" && isSubPath(workdir, source) {
+		return true
+	}
+
+	for _, prefix := range allowedBindSources {
+		if isSubPath(prefix, source) {
+			return true
+		}
+	}
+
+	return slices.Contains(allowedBindSourceFiles, source)
+}
+
 // proc1Sensitive lists /proc/1 sub-paths that must never be opened from
 // sidecar processes. Defense-in-depth behind the /dev/null mask on
 // /proc/1/mem and the mount supervisor blocking unmounts.
 var proc1Sensitive = []string{
-	"/proc/1/mem",
-	"/proc/1/environ",
-	"/proc/1/maps",
-	"/proc/1/root",
+	"/proc/1/auxv",
 	"/proc/1/cwd",
+	"/proc/1/environ",
 	"/proc/1/exe",
+	"/proc/1/io",
+	"/proc/1/maps",
+	"/proc/1/mem",
+	"/proc/1/pagemap",
+	"/proc/1/root",
 	"/proc/1/stack",
 	"/proc/1/syscall",
-	"/proc/1/io",
-	"/proc/1/auxv",
-	"/proc/1/pagemap",
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +172,15 @@ func handleMount(
 	if isProtected(target, protected) {
 		resp.Error = -int32(unix.EPERM)
 		logf("BLOCKED mount target=%s pid=%d flags=0x%x bin=%s", target, pid, flags, exePath(pid))
+		return
+	}
+
+	// Block bind mounts from disallowed sources. This is the syscall-level
+	// equivalent of the OCI hook's checkMounts()
+	if flags&unix.MS_BIND != 0 && flags&unix.MS_REMOUNT == 0 && !isAllowedBindSource(source, workdir) {
+		resp.Error = -int32(unix.EPERM)
+		logf("BLOCKED mount(MS_BIND) source=%s target=%s pid=%d bin=%s (source not allowed)",
+			source, target, pid, exePath(pid))
 		return
 	}
 
