@@ -281,7 +281,6 @@ func handleExecve(
 
 	resolved := resolveExecPath(pathname, pid)
 	if resolved == "" {
-		logf("WARNING: execve cannot resolve path=%s pid=%d (allowing)", pathname, pid)
 		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
 		return
 	}
@@ -319,8 +318,6 @@ func handleExecveat(
 
 	resolved := resolveExecveatPath(pid, notif.Data.Args[0], notif.Data.Args[1], notif.Data.Args[4])
 	if resolved == "" {
-		logf("WARNING: execveat cannot resolve pid=%d dirfd=%d flags=0x%x (allowing)",
-			pid, notif.Data.Args[0], notif.Data.Args[4])
 		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
 		return
 	}
