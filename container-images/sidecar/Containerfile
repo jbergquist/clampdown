@@ -25,7 +25,8 @@ ARG TARGETARCH
 ARG PODMAN_VERSION=v5.8.1
 RUN echo "podman-static ${PODMAN_VERSION} (${TARGETARCH})" \
     && wget -qO- "https://github.com/mgoltzsche/podman-static/releases/download/${PODMAN_VERSION}/podman-linux-${TARGETARCH}.tar.gz" \
-    | tar xz --strip-components=1 -C /
+    | tar xz --strip-components=1 -C / \
+    && rm -f /usr/local/bin/fuse-overlayfs
 
 # extract iptables from alpine and
 FROM alpine:3.23 AS iptables
@@ -54,6 +55,8 @@ COPY --from=podman /usr/local/lib/podman/ /usr/local/lib/podman/
 COPY --from=podman /etc/containers/ /etc/containers/
 # Hardened container defaults — drop-in loaded after stock containers.conf.
 COPY containers.conf /etc/containers/containers.conf
+# Storage: native kernel overlay (not fuse-overlayfs). Removes /dev/fuse dependency.
+COPY storage.conf /etc/containers/storage.conf
 # Registry defaults: short-name-mode=permissive + unqualified-search=docker.io.
 # Prevents interactive "which registry?" prompt that hangs non-TTY contexts.
 COPY registries.conf /etc/containers/registries.conf

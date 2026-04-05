@@ -90,7 +90,6 @@ func sidecarConfig(
 			"SYS_PTRACE",
 			"SYS_RESOURCE",
 		},
-		Devices:        []string{"/dev/fuse"},
 		SeccompProfile: seccompPath,
 		Resources:      container.Resources{Memory: opts.Memory, CPUs: opts.CPUs, PIDLimit: sidecarPIDLimit},
 		Env: map[string]string{
