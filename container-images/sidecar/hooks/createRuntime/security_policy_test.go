@@ -32,8 +32,33 @@ func TestIsSubPath(t *testing.T) {
 	}
 }
 
+// testCanonicalJSON is the canonical profile used by tests.
+// Both the "canonical file" and the "container profile" use this same JSON
+// so the rule-matching check passes.
+const testCanonicalJSON = `{"defaultAction":"SCMP_ACT_ALLOW","syscalls":[` +
+	`{"names":["mount","umount2"],"action":"SCMP_ACT_ERRNO","errnoRet":1},` +
+	`{"names":["clone"],"action":"SCMP_ACT_ERRNO","errnoRet":1,"args":[{"index":0,"value":268435456,"valueTwo":268435456,"op":"SCMP_CMP_MASKED_EQ"}]},` +
+	`{"names":["bpf"],"action":"SCMP_ACT_ERRNO","errnoRet":1},` +
+	`{"names":["io_uring_setup"],"action":"SCMP_ACT_ERRNO","errnoRet":38}` +
+	`]}`
+
+// setupCanonicalSeccomp creates a temporary canonical seccomp profile and
+// points canonicalSeccompPath at it.
+func setupCanonicalSeccomp(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seccomp_nested.json")
+	if err := os.WriteFile(path, []byte(testCanonicalJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := canonicalSeccompPath
+	canonicalSeccompPath = path
+	t.Cleanup(func() { canonicalSeccompPath = orig })
+}
+
+// seccompPtr returns a raw JSON profile matching the test canonical.
 func seccompPtr() *json.RawMessage {
-	raw := json.RawMessage(`{}`)
+	raw := json.RawMessage(testCanonicalJSON)
 	return &raw
 }
 
@@ -95,11 +120,95 @@ func TestCheckCaps_DeniedInAmbient(t *testing.T) {
 }
 
 func TestCheckSeccomp_Unconfined(t *testing.T) {
+	setupCanonicalSeccomp(t)
 	c := baseConfig()
 	c.Linux.Seccomp = nil
 	err := checkSeccomp(c)
 	if err == nil {
 		t.Fatal("expected error for nil seccomp")
+	}
+}
+
+func TestCheckSeccomp_EmptyProfile(t *testing.T) {
+	setupCanonicalSeccomp(t)
+	c := baseConfig()
+	raw := json.RawMessage(`{"defaultAction":"SCMP_ACT_ALLOW","syscalls":[]}`)
+	c.Linux.Seccomp = &raw
+	err := checkSeccomp(c)
+	if err == nil {
+		t.Fatal("expected error for profile with 0 rules")
+	}
+}
+
+func TestCheckSeccomp_AllowRulesPadding(t *testing.T) {
+	setupCanonicalSeccomp(t)
+	c := baseConfig()
+	// All ALLOW rules — none match the canonical deny rules.
+	raw := json.RawMessage(`{"defaultAction":"SCMP_ACT_ALLOW","syscalls":[` +
+		`{"names":["mount","umount2"],"action":"SCMP_ACT_ALLOW"},` +
+		`{"names":["bpf"],"action":"SCMP_ACT_ALLOW"},` +
+		`{"names":["io_uring_setup"],"action":"SCMP_ACT_ALLOW"},` +
+		`{"names":["clone"],"action":"SCMP_ACT_ALLOW"}` +
+		`]}`)
+	c.Linux.Seccomp = &raw
+	err := checkSeccomp(c)
+	if err == nil {
+		t.Fatal("expected error for profile with ALLOW rules replacing deny rules")
+	}
+}
+
+func TestCheckSeccomp_MissingRule(t *testing.T) {
+	setupCanonicalSeccomp(t)
+	c := baseConfig()
+	// Has 3 of 4 canonical rules — missing bpf.
+	raw := json.RawMessage(`{"defaultAction":"SCMP_ACT_ALLOW","syscalls":[` +
+		`{"names":["mount","umount2"],"action":"SCMP_ACT_ERRNO","errnoRet":1},` +
+		`{"names":["clone"],"action":"SCMP_ACT_ERRNO","errnoRet":1,"args":[{"index":0,"value":268435456,"valueTwo":268435456,"op":"SCMP_CMP_MASKED_EQ"}]},` +
+		`{"names":["io_uring_setup"],"action":"SCMP_ACT_ERRNO","errnoRet":38}` +
+		`]}`)
+	c.Linux.Seccomp = &raw
+	err := checkSeccomp(c)
+	if err == nil {
+		t.Fatal("expected error for profile missing a canonical rule")
+	}
+}
+
+func TestCheckSeccomp_InvalidJSON(t *testing.T) {
+	setupCanonicalSeccomp(t)
+	c := baseConfig()
+	raw := json.RawMessage(`not valid json`)
+	c.Linux.Seccomp = &raw
+	err := checkSeccomp(c)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestCheckSeccomp_MatchesCanonical(t *testing.T) {
+	setupCanonicalSeccomp(t)
+	c := baseConfig()
+	// seccompPtr() returns exactly the canonical profile.
+	err := checkSeccomp(c)
+	if err != nil {
+		t.Errorf("expected pass for profile matching canonical, got: %v", err)
+	}
+}
+
+func TestCheckSeccomp_SupersetAllowed(t *testing.T) {
+	setupCanonicalSeccomp(t)
+	c := baseConfig()
+	// Canonical rules plus an extra rule — should pass (superset is OK).
+	raw := json.RawMessage(`{"defaultAction":"SCMP_ACT_ALLOW","syscalls":[` +
+		`{"names":["mount","umount2"],"action":"SCMP_ACT_ERRNO","errnoRet":1},` +
+		`{"names":["clone"],"action":"SCMP_ACT_ERRNO","errnoRet":1,"args":[{"index":0,"value":268435456,"valueTwo":268435456,"op":"SCMP_CMP_MASKED_EQ"}]},` +
+		`{"names":["bpf"],"action":"SCMP_ACT_ERRNO","errnoRet":1},` +
+		`{"names":["io_uring_setup"],"action":"SCMP_ACT_ERRNO","errnoRet":38},` +
+		`{"names":["extra_syscall"],"action":"SCMP_ACT_ERRNO","errnoRet":1}` +
+		`]}`)
+	c.Linux.Seccomp = &raw
+	err := checkSeccomp(c)
+	if err != nil {
+		t.Errorf("expected pass for superset profile, got: %v", err)
 	}
 }
 
@@ -709,6 +818,7 @@ func TestCheckAdditionalGids_UnexpectedGroup(t *testing.T) {
 
 // TestAllChecksPass verifies a well-formed config passes all checks.
 func TestAllChecksPass(t *testing.T) {
+	setupCanonicalSeccomp(t)
 	t.Setenv("SANDBOX_WORKDIR", "/work")
 	t.Setenv("SANDBOX_REQUIRE_DIGEST", "warn")
 	c := baseConfig()

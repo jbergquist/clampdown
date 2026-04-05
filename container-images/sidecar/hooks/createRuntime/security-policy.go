@@ -218,10 +218,95 @@ func checkCaps(config Config) error {
 	return nil
 }
 
+// canonicalSeccompPath is the path to the canonical seccomp profile.
+// Overridable in tests.
+var canonicalSeccompPath = "/etc/containers/seccomp_nested.json"
+
+// seccompRule represents a single syscall rule for comparison.
+// Two rules match if they have the same action, sorted names, and args.
+type seccompRule struct {
+	Names    []string    `json:"names"`
+	Action   string      `json:"action"`
+	ErrnoRet *uint       `json:"errnoRet,omitempty"`
+	Args     []seccompArg `json:"args,omitempty"`
+}
+
+type seccompArg struct {
+	Index    uint32 `json:"index"`
+	Value    uint64 `json:"value"`
+	ValueTwo uint64 `json:"valueTwo"`
+	Op       string `json:"op"`
+}
+
+type seccompProfile struct {
+	Syscalls []seccompRule `json:"syscalls"`
+}
+
+// seccompRuleKey returns a canonical string key for a rule.
+// The OCI translation strips comments but preserves names, action,
+// errnoRet, and args unchanged.
+func seccompRuleKey(r seccompRule) string {
+	names := make([]string, len(r.Names))
+	copy(names, r.Names)
+	slices.Sort(names)
+	data, _ := json.Marshal(struct {
+		Names    []string    `json:"n"`
+		Action   string      `json:"a"`
+		ErrnoRet *uint       `json:"e,omitempty"`
+		Args     []seccompArg `json:"r,omitempty"`
+	}{names, r.Action, r.ErrnoRet, r.Args})
+	return string(data)
+}
+
 func checkSeccomp(config Config) error {
 	if config.Linux.Seccomp == nil {
 		return blocked(int(syscall.EPERM), "seccomp=unconfined not permitted in nested containers")
 	}
+
+	// Parse the canonical profile to get the set of expected rules.
+	canonicalData, err := os.ReadFile(canonicalSeccompPath)
+	if err != nil {
+		return blocked(int(syscall.EPERM), "cannot read canonical seccomp profile: %v", err)
+	}
+	var canonicalProfile seccompProfile
+	if err := json.Unmarshal(canonicalData, &canonicalProfile); err != nil {
+		return blocked(int(syscall.EPERM), "cannot parse canonical seccomp profile: %v", err)
+	}
+
+	// Build set of canonical rule keys.
+	canonicalKeys := make(map[string]bool, len(canonicalProfile.Syscalls))
+	for _, r := range canonicalProfile.Syscalls {
+		if len(r.Names) > 0 {
+			canonicalKeys[seccompRuleKey(r)] = true
+		}
+	}
+
+	// Parse the container's profile.
+	var containerProfile seccompProfile
+	if err := json.Unmarshal(*config.Linux.Seccomp, &containerProfile); err != nil {
+		return blocked(int(syscall.EPERM), "invalid seccomp profile: %v", err)
+	}
+
+	// Build set of container rule keys and check every canonical rule is present.
+	containerKeys := make(map[string]bool, len(containerProfile.Syscalls))
+	for _, r := range containerProfile.Syscalls {
+		if len(r.Names) > 0 {
+			containerKeys[seccompRuleKey(r)] = true
+		}
+	}
+
+	var missing []string
+	for key := range canonicalKeys {
+		if !containerKeys[key] {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		return blocked(int(syscall.EPERM),
+			"seccomp profile is missing %d rules from the canonical profile — custom profiles not permitted",
+			len(missing))
+	}
+
 	return nil
 }
 
