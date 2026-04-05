@@ -345,6 +345,203 @@
         { "index": 0, "value": 1499557217, "op": "SCMP_CMP_EQ" }
       ],
       "comment": "Block prctl(PR_SET_PTRACER, 0x59616d61): prevents Yama ptrace_scope bypass. Inherited by nested containers."
+    },
+
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        { "index": 1, "value": 1074041865, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "ALLOW FICLONE (0x40049409): cp --reflink. Shares btrfs magic 0x94. Must precede btrfs magic-byte block."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        { "index": 1, "value": 1075876877, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "ALLOW FICLONERANGE (0x4020940d): range-based reflink clone. Shares btrfs magic 0x94."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 37888, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL btrfs ioctls (magic 0x94). ENOTTY. FICLONE/FICLONERANGE exempted above."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 64768, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL device mapper ioctls (magic 0xfd). ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 19456, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL loop device ioctls (magic 0x4c). ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 62720, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL f2fs ioctls (magic 0xf5). ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 28160, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL nilfs2 ioctls (magic 0x6e). ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 52480, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL reiserfs ioctls (magic 0xcd). ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 48128, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL bcachefs ioctls (magic 0xbc). ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 58624, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL FUSE device ioctls (magic 0xe5). ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 2147768445, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_GOINGDOWN / EXT4_IOC_SHUTDOWN (0x8004587d): filesystem shutdown."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074288750, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSGROWFSDATA."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074288751, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSGROWFSLOG."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074288752, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSGROWFSRT."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3221772397, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_SWAPEXT."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3221772389, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSBULKSTAT."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3221772390, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSBULKSTAT_SINGLE."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3221772391, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSINUMBERS."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074292232, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block EXT4_IOC_GROUP_ADD."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074292240, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block EXT4_IOC_RESIZE_FS."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 4727, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block BLKDISCARD: discard/TRIM blocks — data destruction."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 4735, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block BLKZEROOUT: zero out blocks — data destruction."
     }
 
   ]

@@ -40,9 +40,63 @@
       "action": "SCMP_ACT_ERRNO",
       "errnoRet": 1,
       "args": [
+        { "index": 0, "value": 131072, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 131072 }
+      ],
+      "comment": "Block clone(CLONE_NEWNS 0x20000): mount namespace creation."
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 33554432, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 33554432 }
+      ],
+      "comment": "Block clone(CLONE_NEWCGROUP 0x2000000): cgroup namespace creation."
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 67108864, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 67108864 }
+      ],
+      "comment": "Block clone(CLONE_NEWUTS 0x4000000): UTS namespace creation."
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 134217728, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 134217728 }
+      ],
+      "comment": "Block clone(CLONE_NEWIPC 0x8000000): IPC namespace creation."
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
         { "index": 0, "value": 268435456, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 268435456 }
       ],
-      "comment": "Block clone(CLONE_NEWUSER): user namespace escalation. Other clone flags (CLONE_VM, CLONE_FS, etc.) remain allowed for threads/processes."
+      "comment": "Block clone(CLONE_NEWUSER 0x10000000): user namespace escalation."
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 536870912, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 536870912 }
+      ],
+      "comment": "Block clone(CLONE_NEWPID 0x20000000): PID namespace creation."
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 1073741824, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 1073741824 }
+      ],
+      "comment": "Block clone(CLONE_NEWNET 0x40000000): network namespace creation."
     },
     {
       "names": ["clone3"],
@@ -55,9 +109,63 @@
       "action": "SCMP_ACT_ERRNO",
       "errnoRet": 1,
       "args": [
+        { "index": 0, "value": 131072, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 131072 }
+      ],
+      "comment": "Block unshare(CLONE_NEWNS 0x20000): mount namespace creation."
+    },
+    {
+      "names": ["unshare"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 33554432, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 33554432 }
+      ],
+      "comment": "Block unshare(CLONE_NEWCGROUP 0x2000000): cgroup namespace creation."
+    },
+    {
+      "names": ["unshare"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 67108864, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 67108864 }
+      ],
+      "comment": "Block unshare(CLONE_NEWUTS 0x4000000): UTS namespace creation."
+    },
+    {
+      "names": ["unshare"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 134217728, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 134217728 }
+      ],
+      "comment": "Block unshare(CLONE_NEWIPC 0x8000000): IPC namespace creation."
+    },
+    {
+      "names": ["unshare"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
         { "index": 0, "value": 268435456, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 268435456 }
       ],
-      "comment": "Block unshare(CLONE_NEWUSER): user namespace escalation."
+      "comment": "Block unshare(CLONE_NEWUSER 0x10000000): user namespace escalation."
+    },
+    {
+      "names": ["unshare"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 536870912, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 536870912 }
+      ],
+      "comment": "Block unshare(CLONE_NEWPID 0x20000000): PID namespace creation."
+    },
+    {
+      "names": ["unshare"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 1073741824, "op": "SCMP_CMP_MASKED_EQ", "valueTwo": 1073741824 }
+      ],
+      "comment": "Block unshare(CLONE_NEWNET 0x40000000): network namespace creation."
     },
 
     {
@@ -206,17 +314,30 @@
         "process_vm_readv",
         "process_vm_writev",
         "kcmp",
-        "process_madvise"
+        "process_madvise",
+        "pidfd_getfd"
       ],
       "action": "SCMP_ACT_ERRNO",
       "errnoRet": 1,
-      "comment": "Privilege escalation. ptrace: process injection (CVE-2016-9962). process_vm_*: cross-process memory. kcmp: info disclosure."
+      "comment": "Privilege escalation. ptrace: process injection (CVE-2016-9962). process_vm_*: cross-process memory. kcmp: info disclosure. pidfd_getfd: fd theft from any visible process (same PTRACE_MODE_ATTACH check as ptrace)."
+    },
+    {
+      "names": ["pidfd_open"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 38,
+      "comment": "Block pidfd_open: prevents pidfd_getfd attack chain. ENOSYS so Go >= 1.23 falls back to PID-based process management."
     },
     {
       "names": ["execveat"],
       "action": "SCMP_ACT_ERRNO",
       "errnoRet": 38,
-      "comment": "Fileless execution from fd. ENOSYS so glibc posix_spawn falls back to execve. memfd_create + execveat combo still fails."
+      "comment": "Fileless execution from fd. ENOSYS so glibc posix_spawn falls back to execve."
+    },
+    {
+      "names": ["memfd_create"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 38,
+      "comment": "Fileless execution via memfd_create + execve(/proc/self/fd/N). Bypasses Landlock, noexec, exec allowlist. ENOSYS so V8 JIT falls back to anonymous mmap. No standard workload (Go, Python, Rust, npm, pip, cargo, git) uses memfd_create."
     },
 
     {
@@ -377,24 +498,442 @@
     },
 
     {
-      "names": ["prctl"],
+      "names": ["listmount", "statmount"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 38,
+      "comment": "Mount enumeration (kernel 6.8+). Info disclosure — reveals all mount points and mount root paths. ENOSYS."
+    },
+    {
+      "names": ["fspick"],
       "action": "SCMP_ACT_ERRNO",
       "errnoRet": 1,
-      "args": [
-        { "index": 0, "value": 4, "op": "SCMP_CMP_EQ" },
-        { "index": 1, "value": 0, "op": "SCMP_CMP_GT" }
-      ],
-      "comment": "Block prctl(PR_SET_DUMPABLE, >0): prevents re-enabling core dumps after RLIMIT_CORE=0. Core dumps can leak secrets from process memory. PR_SET_DUMPABLE(0) (disable) is still allowed."
+      "comment": "New mount API: pick existing filesystem for reconfiguration. Same risk as fsopen."
     },
 
     {
-      "names": ["prctl"],
-      "action": "SCMP_ACT_ERRNO",
-      "errnoRet": 1,
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ALLOW",
       "args": [
-        { "index": 0, "value": 1499557217, "op": "SCMP_CMP_EQ" }
+        { "index": 1, "value": 1074041865, "op": "SCMP_CMP_EQ" }
       ],
-      "comment": "Block prctl(PR_SET_PTRACER, 0x59616d61): prevents designating a ptracer to bypass Yama ptrace_scope. Defense-in-depth alongside ptrace seccomp block."
+      "comment": "ALLOW FICLONE (0x40049409): cp --reflink, git-lfs, package managers. Shares btrfs magic 0x94. Must precede btrfs magic-byte block."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        { "index": 1, "value": 1075876877, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "ALLOW FICLONERANGE (0x4020940d): range-based reflink clone. Shares btrfs magic 0x94."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 37888, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL btrfs ioctls (magic 0x94): SUBVOL_CREATE, SNAP_CREATE, TREE_SEARCH, SEND, BALANCE, RESIZE, DEFRAG, FS_INFO, DEV_INFO, etc. ENOTTY. FICLONE/FICLONERANGE exempted above."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 64768, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL device mapper ioctls (magic 0xfd): DM_DEV_CREATE, DM_REMOVE_ALL, DM_TABLE_LOAD, etc. ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 19456, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL loop device ioctls (magic 0x4c): LOOP_SET_FD, LOOP_CLR_FD, LOOP_CONFIGURE, LOOP_CTL_*, etc. ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 62720, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL f2fs ioctls (magic 0xf5): GARBAGE_COLLECT, RESIZE_FS, DEFRAGMENT, MOVE_RANGE, atomic write, etc. ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 28160, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL nilfs2 ioctls (magic 0x6e): CHANGE_CPMODE, DELETE_CHECKPOINT, CLEAN_SEGMENTS, RESIZE. ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 52480, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL reiserfs ioctls (magic 0xcd). ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 48128, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL bcachefs ioctls (magic 0xbc): DISK_ADD/REMOVE, SUBVOLUME_CREATE/DESTROY. ENOTTY."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 58624, "valueTwo": 65280, "op": "SCMP_CMP_MASKED_EQ" }
+      ],
+      "comment": "Block ALL FUSE device ioctls (magic 0xe5): FUSE_DEV_IOC_CLONE, BACKING_OPEN, BACKING_CLOSE. ENOTTY."
+    },
+
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 2147768445, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_GOINGDOWN / EXT4_IOC_SHUTDOWN / F2FS_IOC_SHUTDOWN (0x8004587d): filesystem shutdown — immediate data loss. Same ioctl value across all three."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074288750, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSGROWFSDATA: grow XFS data section."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074288751, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSGROWFSLOG: grow XFS log section."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074288752, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSGROWFSRT: grow XFS realtime section."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3221772397, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_SWAPEXT: swap extents between files."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074288769, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_EXCHANGE_RANGE: exchange file ranges (6.10+)."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3221772348, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_SCRUB_METADATA: online filesystem scrub."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3221772389, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSBULKSTAT: bulk inode stat — enumerate entire filesystem."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3221772390, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSBULKSTAT_SINGLE: single inode stat by number."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3221772391, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSINUMBERS: enumerate all inode numbers."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 2148030588, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSGEOMETRY: filesystem geometry info disclosure."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 2148030564, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_FSGEOMETRY_V1: V1 geometry info."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 2148030591, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_BULKSTAT v5: V5 bulk stat interface."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 2148030592, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_INUMBERS v5: V5 inode enumeration."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3221772326, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_GETBMAP: get block map — reveals physical layout."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3221772327, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_GETBMAPA: get block map alternate."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3221772344, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block XFS_IOC_GETBMAPX: extended block map."
+    },
+
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074292232, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block EXT4_IOC_GROUP_ADD: add block group to ext4."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074292240, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block EXT4_IOC_RESIZE_FS: resize ext4 filesystem."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 26121, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block EXT4_IOC_MIGRATE: migrate inode format."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 26129, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block EXT4_IOC_SWAP_BOOT: swap boot inode."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 26152, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block EXT4_IOC_CLEAR_ES_CACHE: clear extent status cache."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074030123, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block EXT4_IOC_CHECKPOINT: flush journal checkpoint."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 26124, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block EXT4_IOC_ALLOC_DA_BLKS: force delayed allocation."
+    },
+
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 2148296211, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block FS_IOC_SET_ENCRYPTION_POLICY: set fscrypt policy."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3226494487, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block FS_IOC_ADD_ENCRYPTION_KEY: add fscrypt key."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3225445912, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block FS_IOC_REMOVE_ENCRYPTION_KEY: remove fscrypt key."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3225445913, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block FS_IOC_REMOVE_ENCRYPTION_KEY_ALL_USERS: remove key for all users."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1082156677, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block FS_IOC_ENABLE_VERITY: enable fs-verity (irreversible — makes file permanently immutable)."
+    },
+
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 4701, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block BLKROSET: set block device read-only."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 4703, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block BLKRRPART: re-read partition table."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 4705, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block BLKFLSBUF: flush block device buffer cache."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 1074270833, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block BLKBSZSET: set block size."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 4727, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block BLKDISCARD: discard/TRIM blocks — data destruction."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 4735, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block BLKZEROOUT: zero out blocks — data destruction."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 4710, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block BLKSECTSET: set max sectors per request."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 4706, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block BLKRASET: set read-ahead."
     }
 
   ]
