@@ -250,6 +250,13 @@ func TestCheckNamespaces_JoinedViaPath(t *testing.T) {
 
 func TestCheckMounts_Pass(t *testing.T) {
 	t.Setenv("SANDBOX_WORKDIR", "/home/user/project")
+	// Simulate main() resolving %CID% placeholder.
+	orig := append([]string{}, infraMountPrefixes...)
+	for i, p := range infraMountPrefixes {
+		infraMountPrefixes[i] = strings.ReplaceAll(p, "%CID%", "abc123def456")
+	}
+	t.Cleanup(func() { infraMountPrefixes = orig })
+
 	c := baseConfig()
 	c.Mounts = []struct {
 		Source      string   `json:"source"`
@@ -259,12 +266,80 @@ func TestCheckMounts_Pass(t *testing.T) {
 	}{
 		{Source: "proc", Destination: "/proc", Type: "proc"},
 		{Source: "/home/user/project/src", Destination: "/src"},
-		{Source: "/var/lib/containers/storage/overlay/abc", Destination: "/merged"},
+		{Source: "/var/run/containers/storage/overlay-containers/abc123def456/userdata/resolv.conf", Destination: "/etc/resolv.conf"},
 		{Source: "/sandbox-seal", Destination: "/.sandbox/seal"},
 	}
 	err := checkMounts(c)
 	if err != nil {
 		t.Errorf("expected pass, got: %v", err)
+	}
+}
+
+func TestCheckMounts_VolumePass(t *testing.T) {
+	t.Setenv("SANDBOX_WORKDIR", "/home/user/project")
+	c := baseConfig()
+	c.Mounts = []struct {
+		Source      string   `json:"source"`
+		Destination string   `json:"destination"`
+		Type        string   `json:"type"`
+		Options     []string `json:"options"`
+	}{
+		{Source: "/var/lib/containers/storage/volumes/abc123/_data", Destination: "/data"},
+	}
+	err := checkMounts(c)
+	if err != nil {
+		t.Errorf("expected pass for valid volume mount, got: %v", err)
+	}
+}
+
+func TestCheckMounts_VolumeRootBlocked(t *testing.T) {
+	t.Setenv("SANDBOX_WORKDIR", "/home/user/project")
+	c := baseConfig()
+	c.Mounts = []struct {
+		Source      string   `json:"source"`
+		Destination string   `json:"destination"`
+		Type        string   `json:"type"`
+		Options     []string `json:"options"`
+	}{
+		{Source: "/var/lib/containers/storage/volumes", Destination: "/vols"},
+	}
+	err := checkMounts(c)
+	if err == nil {
+		t.Fatal("expected error for volumes root mount")
+	}
+}
+
+func TestCheckMounts_StorageRootBlocked(t *testing.T) {
+	t.Setenv("SANDBOX_WORKDIR", "/home/user/project")
+	c := baseConfig()
+	c.Mounts = []struct {
+		Source      string   `json:"source"`
+		Destination string   `json:"destination"`
+		Type        string   `json:"type"`
+		Options     []string `json:"options"`
+	}{
+		{Source: "/var/lib/containers/storage", Destination: "/storage"},
+	}
+	err := checkMounts(c)
+	if err == nil {
+		t.Fatal("expected error for storage root mount")
+	}
+}
+
+func TestCheckMounts_OverlayBlocked(t *testing.T) {
+	t.Setenv("SANDBOX_WORKDIR", "/home/user/project")
+	c := baseConfig()
+	c.Mounts = []struct {
+		Source      string   `json:"source"`
+		Destination string   `json:"destination"`
+		Type        string   `json:"type"`
+		Options     []string `json:"options"`
+	}{
+		{Source: "/var/lib/containers/storage/overlay", Destination: "/layers"},
+	}
+	err := checkMounts(c)
+	if err == nil {
+		t.Fatal("expected error for overlay mount")
 	}
 }
 

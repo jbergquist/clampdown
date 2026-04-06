@@ -142,15 +142,35 @@ var requiredReadonlyPaths = []string{
 
 var deniedPropagation = []string{"shared", "rshared", "slave", "rslave"}
 
-// Podman infrastructure paths — overlay layers, resolv.conf, etc.
-// Mounts from subdirectories of these are always allowed.
+// infraMountPrefixes lists paths always allowed as bind mount sources.
+// %CID% is replaced with the container ID from the OCI state in main().
 var infraMountPrefixes = []string{
-	"/var/lib/containers/storage",
-	"/var/run/containers/storage",
+	"/var/lib/containers/storage/overlay-containers/%CID%",
+	"/var/run/containers/storage/overlay-containers/%CID%",
 	"/var/cache/containers",
 	"/run/credentials",
 	"/dev/null",
 	"/empty",
+}
+
+// isValidVolumeMount checks if a source path is a valid named volume data dir.
+// Accepts /var/lib/containers/storage/volumes/<name>/_data (and subpaths).
+// Rejects the volumes root, traversal attempts, and anything not matching
+// the <name>/_data structure.
+func isValidVolumeMount(source string) bool {
+	const prefix = "/var/lib/containers/storage/volumes/"
+	if !strings.HasPrefix(source, prefix) {
+		return false
+	}
+	rel := strings.TrimPrefix(source, prefix)
+	parts := strings.SplitN(rel, "/", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	if parts[0] == "" || parts[0] == "." || parts[0] == ".." {
+		return false
+	}
+	return parts[1] == "_data"
 }
 
 // logf writes to the sidecar's PID 1 stderr so output appears in
@@ -369,6 +389,9 @@ func checkMounts(config Config) error {
 				break
 			}
 		}
+		if !allowed && isValidVolumeMount(source) {
+			allowed = true
+		}
 		if !allowed {
 			return blocked(
 				int(syscall.EACCES),
@@ -510,6 +533,9 @@ func checkMountOptions(config Config) error {
 				isInfra = true
 				break
 			}
+		}
+		if !isInfra && isValidVolumeMount(source) {
+			isInfra = true
 		}
 		if isInfra {
 			continue
@@ -763,6 +789,12 @@ func main() {
 	cmd := "-"
 	if len(config.Process.Args) > 0 {
 		cmd = strings.Join(config.Process.Args, " ")
+	}
+
+	// Resolve %CID% placeholder in infraMountPrefixes so only THIS
+	// container's runtime plumbing (resolv.conf, hosts, etc.) is allowed.
+	for i, p := range infraMountPrefixes {
+		infraMountPrefixes[i] = strings.ReplaceAll(p, "%CID%", state.ID)
 	}
 
 	checks := []func(Config) error{
