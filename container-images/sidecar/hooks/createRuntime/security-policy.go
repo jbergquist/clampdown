@@ -97,7 +97,7 @@ var deniedCaps = []string{
 }
 
 // and we require containers to not use un-namespaced resources.
-var requiredNamespaces = []string{"pid", "network", "ipc", "mount", "cgroup"}
+var requiredNamespaces = []string{"pid", "network", "ipc", "mount", "cgroup", "uts"}
 
 // Sensitive /proc and /sys paths that must be hidden from containers.
 // Primary enforcement is containers.conf volumes on the sidecar's read-only

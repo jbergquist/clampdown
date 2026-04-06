@@ -74,7 +74,7 @@ func baseConfig() Config {
 		Type string `json:"type"`
 		Path string `json:"path"`
 	}{
-		{Type: "pid"}, {Type: "network"}, {Type: "ipc"}, {Type: "mount"}, {Type: "cgroup"},
+		{Type: "pid"}, {Type: "network"}, {Type: "ipc"}, {Type: "mount"}, {Type: "cgroup"}, {Type: "uts"},
 	}
 	c.Linux.MaskedPaths = append([]string{}, requiredMaskedPaths...)
 	c.Linux.ReadonlyPaths = append([]string{}, requiredReadonlyPaths...)
