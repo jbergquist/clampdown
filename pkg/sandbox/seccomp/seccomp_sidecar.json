@@ -542,6 +542,43 @@
         { "index": 1, "value": 4735, "op": "SCMP_CMP_EQ" }
       ],
       "comment": "Block BLKZEROOUT: zero out blocks — data destruction."
+    },
+
+    {
+      "names": ["remap_file_pages"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 38,
+      "comment": "Non-linear page mappings. Deprecated since 3.16. ENOSYS."
+    },
+    {
+      "names": ["reboot"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "System reboot. Not needed by any sidecar component."
+    },
+    {
+      "names": ["quotactl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Disk quota management. Not needed by any sidecar component."
+    },
+    {
+      "names": ["name_to_handle_at"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Shocker exploit prerequisite (CVE-2014-3519). No sidecar component uses file handles."
+    },
+    {
+      "names": ["fanotify_init", "fanotify_mark"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Filesystem monitoring. Not needed by podman/crun/iptables."
+    },
+    {
+      "names": ["adjtimex", "clock_adjtime", "clock_adjtime64"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Clock adjustment. Sidecar reads time, never adjusts it."
     }
 
   ]

@@ -934,6 +934,35 @@
         { "index": 1, "value": 4706, "op": "SCMP_CMP_EQ" }
       ],
       "comment": "Block BLKRASET: set read-ahead."
+    },
+    {
+      "names": ["ioctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 25,
+      "args": [
+        { "index": 1, "value": 3223348747, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block FS_IOC_FIEMAP (0xC020660B): reveals physical block offsets on btrfs. cp/rsync fall back to normal read/write. ENOTTY."
+    },
+
+    {
+      "names": ["prctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 4, "op": "SCMP_CMP_EQ" },
+        { "index": 1, "value": 0, "op": "SCMP_CMP_GT" }
+      ],
+      "comment": "Block prctl(PR_SET_DUMPABLE, >0): prevents re-enabling core dumps after RLIMIT_CORE=0."
+    },
+    {
+      "names": ["prctl"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        { "index": 0, "value": 1499557217, "op": "SCMP_CMP_EQ" }
+      ],
+      "comment": "Block prctl(PR_SET_PTRACER, 0x59616d61): prevents designating a ptracer to bypass Yama ptrace_scope."
     }
 
   ]
