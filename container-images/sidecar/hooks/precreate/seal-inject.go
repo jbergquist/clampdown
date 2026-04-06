@@ -208,34 +208,36 @@ func main() {
 	// Build containers (podman build / buildah) skip precreate hooks
 	// entirely, so this only affects `podman run` containers.
 	uidBytes, readErr := os.ReadFile("/run/sandbox/uid")
-	if readErr == nil {
-		uidStr := strings.TrimSpace(string(uidBytes))
-		var user map[string]json.RawMessage
-		if process["user"] != nil {
-			_ = json.Unmarshal(process["user"], &user)
-		}
-		if user == nil {
-			user = make(map[string]json.RawMessage)
-		}
-		uid, uidErr := strconv.Atoi(uidStr)
-		if uidErr != nil || uid == 0 {
-			logf("seal-inject: invalid uid %q from /run/sandbox/uid", uidStr)
-			os.Exit(1)
-		}
-		user["uid"], _ = json.Marshal(uid)
-		gidStr := uidStr
-		gidBytes, gidErr := os.ReadFile("/run/sandbox/gid")
-		if gidErr == nil {
-			gidStr = strings.TrimSpace(string(gidBytes))
-		}
-		gid, gidParseErr := strconv.Atoi(gidStr)
-		if gidParseErr != nil {
-			logf("seal-inject: invalid gid %q from /run/sandbox/gid", gidStr)
-			os.Exit(1)
-		}
-		user["gid"], _ = json.Marshal(gid)
-		process["user"], _ = json.Marshal(user)
+	if readErr != nil {
+		logf("FATAL: cannot read /run/sandbox/uid: %v", readErr)
+		os.Exit(1)
 	}
+	uidStr := strings.TrimSpace(string(uidBytes))
+	var user map[string]json.RawMessage
+	if process["user"] != nil {
+		_ = json.Unmarshal(process["user"], &user)
+	}
+	if user == nil {
+		user = make(map[string]json.RawMessage)
+	}
+	uid, uidErr := strconv.Atoi(uidStr)
+	if uidErr != nil || uid == 0 {
+		logf("seal-inject: invalid uid %q from /run/sandbox/uid", uidStr)
+		os.Exit(1)
+	}
+	user["uid"], _ = json.Marshal(uid)
+	gidStr := uidStr
+	gidBytes, gidErr := os.ReadFile("/run/sandbox/gid")
+	if gidErr == nil {
+		gidStr = strings.TrimSpace(string(gidBytes))
+	}
+	gid, gidParseErr := strconv.Atoi(gidStr)
+	if gidParseErr != nil {
+		logf("seal-inject: invalid gid %q from /run/sandbox/gid", gidStr)
+		os.Exit(1)
+	}
+	user["gid"], _ = json.Marshal(gid)
+	process["user"], _ = json.Marshal(user)
 
 	// Prepend seal to process.args.
 	var args []string
