@@ -28,16 +28,25 @@
 │  │    6. Install seccomp-notif filter -> supervisor goroutine       │    │
 │  │    7. Start podman system service as child process               │    │
 │  │                                                                  │    │
-│  │  Seccomp: seccomp_sidecar.json (denylist, ~85 blocked)           │    │
+│  │  Storage: native kernel overlay (no /dev/fuse, no fuse-overlayfs)│    │
+│  │  Masked /proc paths: devices, diskstats, kallsyms, kcore,        │    │
+│  │    modules, partitions, version, sysrq-trigger, vmcoreinfo       │    │
+│  │                                                                  │    │
+│  │  Seccomp: seccomp_sidecar.json (denylist, ~100 blocked)          │    │
 │  │    Blocks: io_uring, perf_event_open, userfaultfd, modify_ldt,   │    │
 │  │    kcmp, process_madvise, kexec_*, init/delete/finit_module,     │    │
 │  │    add_key, request_key, splice/tee/vmsplice (pipe exploitation),│    │
-│  │    open_by_handle_at, swapoff/swapon, acct, vhangup,             │    │
-│  │    ioperm/iopl, clock_settime, setdomainname/sethostname,        │    │
-│  │    personality (arg-filtered), TIOCSTI/TIOCLINUX/TIOCSETD,       │    │
-│  │    SIOCATMARK, IOC_WATCH_QUEUE_SET_FILTER (watch queue class),   │    │
+│  │    open_by_handle_at, name_to_handle_at, swapoff/swapon, acct,   │    │
+│  │    vhangup, reboot, quotactl, fanotify_init/mark,                │    │
+│  │    adjtimex/clock_adjtime*, remap_file_pages,                    │    │
+│  │    ioperm/iopl, clock_settime, personality (arg-filtered),       │    │
+│  │    TIOCSTI/TIOCLINUX/TIOCSETD, SIOCATMARK,                       │    │
+│  │    IOC_WATCH_QUEUE_SET_FILTER (watch queue class),               │    │
 │  │    MSG_OOB arg-filtered (AF_UNIX UAF class), mq_* (mq_notify     │    │
 │  │    UAF class), MAP_GROWSDOWN (VMA stack expansion class),        │    │
+│  │    FS_IOC_FIEMAP (physical block offset disclosure),             │    │
+│  │    all btrfs/DM/loop/f2fs/nilfs2/reiserfs/bcachefs/FUSE ioctls,  │    │
+│  │    XFS/ext4/fscrypt/fsverity/blkdev admin ioctls,                │    │
 │  │    socket family >= 17, obsolete syscalls.                       │    │
 │  │    Allows: mount, bpf, clone3, seccomp, keyctl, ptrace           │    │
 │  │    -- needed by podman/crun for container management.            │    │
@@ -49,6 +58,8 @@
 │  │    execve, execveat, openat, unlinkat, symlinkat, linkat,        │    │
 │  │    renameat2, setsockopt, socket.                                │    │
 │  │    Policy: BLOCK mount/umount targeting protected paths,         │    │
+│  │    BLOCK bind sources not in allowlist (workdir, %CID%-scoped    │    │
+│  │      runtime plumbing, validated named volumes, rootfs files),   │    │
 │  │    BLOCK non-recursive bind stripping /dev/null sub-mounts,      │    │
 │  │    BLOCK procfs mount from sidecar PID namespace,                │    │
 │  │    BLOCK ptrace/process_vm_* targeting PID 1,                    │    │
@@ -73,7 +84,7 @@
 │  │  ┌─────────────────────────────────────────────────────────┐     │    │
 │  │  │ NESTED CONTAINERS  (podman run/build inside sidecar)    │     │    │
 │  │  │                                                         │     │    │
-│  │  │  Seccomp: workload profile (~133 blocked)               │     │    │
+│  │  │  Seccomp: workload profile (~150 blocked)               │     │    │
 │  │  │  Entrypoint: sandbox-seal -- <original command>         │     │    │
 │  │  │  Landlock V7 (derived from mounts by seal-inject)       │     │    │
 │  │  │  LD_PRELOAD: rename_exdev_shim.so (EXDEV fallback)      │     │    │
@@ -86,7 +97,7 @@
 │  │  Entrypoint: sandbox-seal -- auth-proxy                          │    │
 │  │  Listens: 127.0.0.1:2376 -> upstream API (rewrites auth header)  │    │
 │  │                                                                  │    │
-│  │  Seccomp: workload profile (~133 blocked)                        │    │
+│  │  Seccomp: workload profile (~150 blocked)                        │    │
 │  │  Landlock: ReadOnly:[/], ReadExec:[/usr/local/bin]               │    │
 │  │           ConnectTCP:[443, 53]                                   │    │
 │  │  cap-drop=ALL, ulimit core=0:0, 128m, 512 PIDs                   │    │
@@ -97,7 +108,7 @@
 │  │ AGENT CONTAINER  (Alpine, --network container:SIDECAR)           │    │
 │  │                                                                  │    │
 │  │  Entrypoint: sandbox-seal -- <agent binary>                      │    │
-│  │  Seccomp: workload profile (~133 blocked)                        │    │
+│  │  Seccomp: workload profile (~150 blocked)                        │    │
 │  │  Landlock: workdir RWX, rootfs RO, ConnectTCP:[443,2375,2376]    │    │
 │  │  cap-drop=ALL, no-new-privileges, read-only rootfs               │    │
 │  │                                                                  │    │
@@ -226,27 +237,27 @@ podman run ...
      container created (crun)
                    │
                    ▼
-┌─────────────────────────────────────────────┐
-│  CREATERUNTIME: security-policy (17 checks) │
-│                                             │
-│   1. checkCaps             -> EPERM         │
-│   2. checkSeccomp          -> EPERM         │
-│   3. checkNoNewPrivileges  -> EPERM         │
-│   4. checkNamespaces       -> EOPNOTSUPP    │
-│   5. checkMounts           -> EACCES        │
-│   6. checkMountOptions     -> EACCES        │
-│   7. checkMountPropagation -> EPERM         │
-│   8. checkRootfsPropagation-> EPERM         │
-│   9. checkDevices          -> EACCES        │
-│  10. checkMaskedPaths      -> EPERM         │
-│  11. checkReadonlyPaths    -> EPERM         │
-│  12. checkSysctl           -> EPERM         │
-│  13. checkRlimits          -> EPERM         │
-│  14. checkImageRef         -> EACCES/warn   │
-│  15. checkMountReadonly    -> EACCES        │
-│  16. checkProcMount        -> EPERM         │
-│  17. checkAdditionalGids   -> EPERM         │
-└──────────────────┬──────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│  CREATERUNTIME: security-policy (17 checks)     │
+│                                                 │
+│   1. checkCaps             -> EPERM             │
+│   2. checkSeccomp (rules match canonical) EPERM │
+│   3. checkNoNewPrivileges  -> EPERM             │
+│   4. checkNamespaces       -> EOPNOTSUPP        │
+│   5. checkMounts           -> EACCES            │
+│   6. checkMountOptions     -> EACCES            │
+│   7. checkMountPropagation -> EPERM             │
+│   8. checkRootfsPropagation-> EPERM             │
+│   9. checkDevices          -> EACCES            │
+│  10. checkMaskedPaths      -> EPERM             │
+│  11. checkReadonlyPaths    -> EPERM             │
+│  12. checkSysctl           -> EPERM             │
+│  13. checkRlimits          -> EPERM             │
+│  14. checkImageRef         -> EACCES/warn       │
+│  15. checkMountReadonly    -> EACCES            │
+│  16. checkProcMount        -> EPERM             │
+│  17. checkAdditionalGids   -> EPERM             │
+└──────────────────┬──────────────────────────────┘
                    │
      container process starts
                    │
@@ -283,8 +294,10 @@ the sandbox identity files (UID/GID, bind-mounted read-only), discovers
 protected paths from /proc/self/mountinfo, hardens PID 1
 (PR_SET_DUMPABLE=0, /proc/1/mem masked with /dev/null), builds the
 exec allowlist (SHA-256 hashes of every rootfs executable), installs
-a seccomp-notif filter that intercepts 20 syscalls, and starts the
-supervisor goroutine. The entrypoint then starts podman system service
+a seccomp-notif filter that intercepts 20 syscalls (mount, exec, path
+ops, firewall, ptrace — with bind source allowlist scoped to the
+container ID), and starts the supervisor goroutine. The entrypoint
+then starts podman system service
 as a child process (not exec -- the supervisor must remain as PID 1 to
 handle notifications).
 
@@ -356,8 +369,10 @@ because mount() internally triggers Landlock path hooks (EPERM).
 The sidecar cannot use Landlock (mount() triggers Landlock path hooks
 internally -> EPERM). The seccomp-notif supervisor compensates by
 intercepting 20 syscalls at the kernel level, covering mount
-operations, exec verification, protected-path file operations,
-process targeting, and firewall modification.
+operations (including bind source allowlist with %CID%-scoped
+infrastructure mounts and validated named volumes), exec
+verification, protected-path file operations, process targeting,
+and firewall modification.
 
 The entrypoint installs a seccomp BPF filter using
 `SECCOMP_RET_USER_NOTIF` for 20 syscalls. When any sidecar-level
@@ -379,10 +394,17 @@ open_tree, fsopen, fsconfig, fsmount):
   ancestor (strips `/dev/null` sub-mounts, exposing masked file contents)
 - `mount("proc")` from the sidecar's PID namespace (new procfs would
   expose `/proc/1/mem` without the `/dev/null` mask)
+- Bind mount sources not in the allowlist (workdir, container-specific
+  runtime plumbing at `/var/run/containers/storage/overlay-containers/%CID%`,
+  named volumes validated via `isValidVolumeMount()`, credential forwarding,
+  and rootfs files). Blocks `-v /var/lib/containers/storage:/x` (V-02).
 - `mount_setattr` / `move_mount` on protected paths
 - Non-recursive `open_tree(OPEN_TREE_CLONE)` of the workdir or ancestors
   (same sub-mount stripping attack as non-recursive bind)
 - `fsopen("proc")` from the sidecar's PID namespace
+- All filesystem-admin ioctls blocked at seccomp level (btrfs, DM, loop,
+  XFS, ext4, f2fs, nilfs2, reiserfs, bcachefs, FUSE — via magic-byte
+  matching; FICLONE/FICLONERANGE explicitly allowed for cp --reflink)
 
 **Exec allowlist** (execve, execveat):
 At startup, the supervisor walks the rootfs (same device only, skipping
@@ -459,11 +481,14 @@ Sensitive /proc and /sys paths are masked via containers.conf volumes
 seal-inject does not run for build containers.
 
 security-policy (createRuntime) validates the container against 17
-checks covering capabilities, seccomp, namespaces, mounts, devices,
-masked paths (verifies /dev/null or empty-dir bind mounts), readonly
-paths, sysctls, rlimits, image refs, mount propagation, /proc mount
-type, and supplementary groups. Each violation blocks the container
-with a specific errno.
+checks covering capabilities, seccomp (validates profile rules match
+the canonical seccomp_nested.json — rejects permissive or gutted
+profiles), namespaces, mounts (container-ID-scoped infrastructure
+mount allowlist, validated named volume paths), devices, masked paths
+(verifies /dev/null or empty-dir bind mounts), readonly paths, sysctls,
+rlimits, image refs, mount propagation, /proc mount type, and
+supplementary groups. Each violation blocks the container with a
+specific errno.
 
 ### Host-side tripwire
 
@@ -563,22 +588,30 @@ changes nothing about what the agent can or cannot do.
 
 ### Seccomp profiles
 
-Two profiles exist. The **sidecar profile** (~85 blocked syscalls) is a
+Two profiles exist. The **sidecar profile** (~100 blocked syscalls) is a
 denylist that blocks what the container engine never needs while allowing
 mount, bpf, ptrace, and clone for podman. The kernel inherits it to all
-child processes.
+child processes. Includes all filesystem-admin ioctls (btrfs, DM, loop,
+f2fs, nilfs2, reiserfs, bcachefs, FUSE, XFS, ext4, fscrypt, fsverity,
+block device admin — blocked via magic-byte matching and individual
+rules), FS_IOC_FIEMAP, name_to_handle_at, reboot, quotactl, fanotify,
+and clock adjustment syscalls.
 
-The **workload profile** (~133 blocked syscalls) is stricter, applied to
+The **workload profile** (~150 blocked syscalls) is stricter, applied to
 the agent, proxy, and nested containers. It blocks container escape
-primitives (mount/umount/setns/pivot_root/chroot), the new mount API,
-device creation, kernel exploit primitives (io_uring, bpf, userfaultfd,
-splice/tee/vmsplice, perf_event_open), user namespace creation
-(CLONE_NEWUSER arg-filtered on clone/unshare), privilege escalation
-(ptrace, process_vm_*, execveat), kernel keyring, system disruption,
-hardware I/O, time manipulation, SysV IPC, POSIX message queues
-(mq_notify UAF class), terminal injection (TIOCSTI/TIOCLINUX/TIOCSETD),
-SIOCATMARK (OOB mark ioctl), MSG_OOB arg-filtered on send*/recv*
-(AF_UNIX UAF class), MAP_GROWSDOWN (VMA stack expansion class),
+primitives (mount/umount/setns/pivot_root/chroot), the new mount API
+(fsopen/fsconfig/fsmount/fspick/mount_setattr), device creation,
+kernel exploit primitives (io_uring, bpf, userfaultfd,
+splice/tee/vmsplice, perf_event_open, memfd_create), all namespace
+creation flags (CLONE_NEWUSER/NEWNS/NEWPID/NEWNET/NEWUTS/NEWIPC/
+NEWCGROUP arg-filtered on clone/unshare, clone3 fully blocked),
+privilege escalation (ptrace, process_vm_*, pidfd_open, pidfd_getfd,
+execveat), kernel keyring, system disruption, hardware I/O, time
+manipulation, SysV IPC, POSIX message queues (mq_notify UAF class),
+terminal injection (TIOCSTI/TIOCLINUX/TIOCSETD), SIOCATMARK (OOB mark
+ioctl), MSG_OOB arg-filtered on send*/recv* (AF_UNIX UAF class),
+MAP_GROWSDOWN (VMA stack expansion class), all filesystem-admin ioctls,
+FS_IOC_FIEMAP, mount enumeration (listmount/statmount),
 prctl(PR_SET_DUMPABLE) arg-filtered (prevents core dump re-enable),
 prctl(PR_SET_PTRACER) (prevents Yama ptrace_scope bypass),
 and socket families >= 17. For nested containers it layers on
@@ -609,20 +642,28 @@ mount. The check verifies mount sources are genuinely /dev/null (char
 device major 1, minor 3) or empty directories -- not attacker-controlled
 files.
 
-| Path | Type | Reason |
-|------|------|--------|
-| /proc/kallsyms | file | Kernel symbol addresses (KASLR bypass) |
-| /proc/kcore | file | Physical memory dump |
-| /proc/modules | file | Loaded modules (attack surface enumeration) |
-| /proc/version | file | Kernel version (exploit selection) |
-| /proc/sysrq-trigger | file | System request trigger (DoS) |
-| /sys/kernel/vmcoreinfo | file | Crash dump format layout |
-| /sys/kernel/debug | dir | ftrace, kprobes |
-| /sys/kernel/tracing | dir | ftrace tracing interface |
-| /sys/kernel/security | dir | LSM policy files |
-| /sys/fs/bpf | dir | Pinned eBPF maps/programs |
-| /sys/module | dir | Kernel module parameters |
-| /sys/devices/virtual/dmi | dir | Hardware fingerprint |
+| Path | Type | Where | Reason |
+|------|------|-------|--------|
+| /proc/devices | file | all* | Device list (attack surface enumeration) |
+| /proc/diskstats | file | all* | Disk I/O statistics |
+| /proc/kallsyms | file | all* | Kernel symbol addresses (KASLR bypass) |
+| /proc/kcore | file | all* | Physical memory dump |
+| /proc/modules | file | all* | Loaded modules (attack surface enumeration) |
+| /proc/partitions | file | all* | Partition table |
+| /proc/version | file | all* | Kernel version (exploit selection) |
+| /proc/sysrq-trigger | file | all* | System request trigger (DoS) |
+| /sys/kernel/vmcoreinfo | file | all* | Crash dump format layout |
+| /sys/kernel/debug | dir | nested | ftrace, kprobes |
+| /sys/kernel/tracing | dir | nested | ftrace tracing interface |
+| /sys/kernel/security | dir | nested | LSM policy files |
+| /sys/fs/bpf | dir | nested | Pinned eBPF maps/programs |
+| /sys/module | dir | nested | Kernel module parameters |
+| /sys/devices/virtual/dmi | dir | nested | Hardware fingerprint |
+
+\* "all" = agent, sidecar, proxy (via `hardenedMounts` in config.go) +
+nested containers (via containers.conf volumes). "nested" = nested
+containers only (EmptyRO tmpfs via containers.conf; not applied to
+agent/sidecar/proxy due to sysfs mount constraints).
 
 ### File provenance
 
@@ -631,10 +672,10 @@ Base images pinned by SHA256 digest.
 
 | Image | File | Notes |
 |-------|------|-------|
-| Sidecar | /entrypoint | Go, static (seccomp-notif supervisor, 20 syscalls) |
+| Sidecar | /entrypoint | Go, static (seccomp-notif supervisor, 20 syscalls, CID-scoped mount allowlist) |
 | Sidecar | /sandbox-seal | Go, static (go-landlock, x/sys, psx) |
 | Sidecar | /rename_exdev_shim.so | C, musl -nostdlib |
 | Sidecar | seal-inject, security-policy | Go, static, stdlib only |
-| Sidecar | /usr/local/bin/podman | podman-static v5.8.1 |
+| Sidecar | /usr/local/bin/podman | podman-static v5.8.1 (fuse-overlayfs removed) |
 | Proxy | /usr/local/bin/auth-proxy | Go, static, stdlib only |
 | Proxy | ca-certificates.crt | Alpine CA bundle |

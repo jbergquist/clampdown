@@ -28,7 +28,7 @@ clampdown runs four container types with different privilege levels:
 | Purpose | Container runtime + firewall | API key injection | AI agent process | Tools the agent spawns |
 | Base image | `FROM scratch` (no shell, no libc) | `FROM scratch` | Alpine | User-chosen |
 | Capabilities | 16 (`SYS_ADMIN`, `NET_ADMIN`, ...) | 0 (`cap-drop=ALL`) | 0 (`cap-drop=ALL`) | 10 default (effective set empty) |
-| Seccomp | ~85 blocked | ~133 blocked | ~133 blocked | ~133 blocked + inherited sidecar |
+| Seccomp | ~100 blocked | ~150 blocked | ~150 blocked | ~150 blocked + inherited sidecar |
 | Landlock | No (incompatible with `mount()`) | RO rootfs, TCP 443+53 only | workdir RW, rootfs RO | Derived from bind mounts |
 | Secrets | Registry credentials (opt-in) | Real API keys | None (`sk-proxy` dummy key) | None |
 | Network egress | N/A | TCP 443, 53 (Landlock) | Deny + allowlist only | Allow, private CIDRs blocked |
@@ -39,10 +39,12 @@ clampdown runs four container types with different privilege levels:
 | Core dumps | Allowed | Disabled (`ulimit core=0:0`) | Disabled | Allowed |
 
 - The sidecar is privileged enough to run podman and enforce firewall rules, but has no
-  shell and no libc so it cannot be repurposed. A seccomp-notif supervisor intercepts
-  20 syscalls in real time -- blocking unmounts of masked paths, execution of unknown
-  binaries, deletion of protected files, and unauthorized firewall modification --
-  closing the gap where Landlock cannot be applied.
+  shell and no libc so it cannot be repurposed. Uses native kernel overlay (no /dev/fuse).
+  A seccomp-notif supervisor intercepts 20 syscalls in real time -- blocking unmounts of
+  masked paths, bind mounts from unauthorized sources (container-ID-scoped allowlist),
+  execution of unknown binaries, deletion of protected files, and unauthorized firewall
+  modification -- closing the gap where Landlock cannot be applied. Sensitive /proc and
+  /sys paths are masked with /dev/null across all containers.
 - The auth proxy holds the only copy of real API keys. It runs in a `FROM scratch`
   container with no shell, no writable filesystem, no capabilities, and core dumps
   disabled. The agent gets a dummy key (`sk-proxy`) and a base URL pointing at the
@@ -79,8 +81,10 @@ kernel-enforced walls as one following instructions. That's the point.
 ### Nested container enforcement
 
 The agent runs inside a zero-capability container: `cap-drop=ALL`, read-only rootfs,
-`no-new-privileges`, and a seccomp profile that blocks ~133 syscalls including all
-known kernel exploit primitives (io_uring, userfaultfd, BPF, perf_event, splice/tee).
+`no-new-privileges`, and a seccomp profile that blocks ~150 syscalls including all
+known kernel exploit primitives (io_uring, userfaultfd, BPF, perf_event, splice/tee,
+memfd_create), all namespace creation flags, all filesystem-admin ioctls, and
+mount enumeration syscalls.
 When the agent needs to run a tool -- a compiler, a test runner, a shell command -- it
 sends a `podman run` request to the sidecar's API socket. The sidecar intercepts every
 container creation through two OCI hooks that run synchronously before the container
@@ -94,8 +98,9 @@ kernel interfaces (`/proc/kcore`, `/proc/sysrq-trigger`, and nine others).
 
 **createRuntime** (`security-policy`): validates the final OCI config against 17
 security checks -- blocking privileged mode, disallowed capabilities, host namespace
-sharing, unsafe bind mounts, dangerous devices, RW re-mounts of protected paths,
-/proc mount type, and supplementary groups.
+sharing, unsafe bind mounts (container-ID-scoped infrastructure allowlist), dangerous
+devices, RW re-mounts of protected paths, /proc mount type, supplementary groups,
+and seccomp profile integrity (rules must match the canonical profile).
 A container that fails any check is killed before its entrypoint runs.
 
 Both hooks apply to every `podman run` the agent issues. There is no opt-out.
@@ -104,7 +109,8 @@ Both hooks apply to every `podman run` the agent issues. There is no opt-out.
 
 The sidecar cannot use Landlock (mount() internally triggers Landlock path hooks).
 To compensate, the sidecar entrypoint installs a seccomp-notif BPF filter that
-intercepts 20 syscalls covering mount operations, exec verification, protected-path
+intercepts 20 syscalls covering mount operations (with container-ID-scoped bind
+source allowlist and validated named volume paths), exec verification, protected-path
 file operations, process targeting, and firewall modification. A supervisor goroutine
 evaluates each call against policy and either continues the syscall or blocks it.
 

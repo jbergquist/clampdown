@@ -20,10 +20,11 @@ Clampdown runs an AI coding agent inside a hardened container sandbox. The sandb
 
 - **Host filesystem** — Landlock filesystem MAC + read-only rootfs + protected `.git` and config paths
 - **Network exfiltration** — iptables default-deny allowlist scoped to required API domains
-- **Privilege escalation** — `cap-drop=ALL`, `no-new-privileges`, seccomp (~133 blocked syscalls)
+- **Privilege escalation** — `cap-drop=ALL`, `no-new-privileges`, seccomp (~150 blocked syscalls)
 - **Host modification** — sidecar UID mapping + host-side inotify tripwire (snapshot + restore)
-- **Nested container breakout** — OCI hooks enforce 17 security checks on every `podman run`
-- **Kernel exploit primitives** — seccomp blocks io_uring, eBPF, MSG_OOB, MAP_GROWSDOWN, POSIX MQ, TTY line discipline change, splice/vmsplice, CLONE_NEWUSER
+- **Nested container breakout** — OCI hooks enforce 17 security checks on every `podman run`, seccomp profile validated against canonical rules
+- **Kernel exploit primitives** — seccomp blocks io_uring, eBPF, MSG_OOB, MAP_GROWSDOWN, POSIX MQ, TTY line discipline change, splice/vmsplice, memfd_create, all namespace creation flags, all filesystem-admin ioctls
+- **Info disclosure** — sensitive /proc and /sys paths masked with /dev/null in all containers (agent, sidecar, proxy, nested); storage mount scoped to container ID
 
 For a complete description of all defense layers, see [`DIAGRAM.md`](DIAGRAM.md).
 
