@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +28,9 @@ func readStringFromPID(pid uint32, addr uint64) (string, error) {
 	}
 	path := fmt.Sprintf("/proc/%d/mem", pid)
 	f, err := os.Open(path)
+	if errors.Is(err, os.ErrPermission) {
+		return "", nil
+	}
 	if err != nil {
 		return "", err
 	}
