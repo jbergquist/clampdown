@@ -157,6 +157,18 @@ func (p *Podman) StartProxy(ctx context.Context, cfg ProxyContainerConfig) error
 		args = append(args, "--label", k+"="+v)
 	}
 
+	// Masked paths — DevNull/EmptyRO overlays hiding secret content.
+	for _, m := range cfg.MaskedPaths {
+		switch m.Type {
+		case Bind:
+			// Bind-type masked paths are not used; masks are always DevNull or EmptyRO.
+		case DevNull:
+			args = append(args, "-v", "/dev/null:"+m.Dest+":ro")
+		case EmptyRO:
+			args = append(args, "--tmpfs", m.Dest+":ro,size=0,mode=000")
+		}
+	}
+
 	args = append(args, cfg.Image)
 
 	cmd := p.command(ctx, args...)
@@ -205,6 +217,18 @@ func (p *Podman) StartAgent(ctx context.Context, cfg AgentContainerConfig) error
 	}
 	if cfg.Resources.UlimitCore != "" {
 		args = append(args, "--ulimit", "core="+cfg.Resources.UlimitCore)
+	}
+
+	// Masked paths — DevNull/EmptyRO overlays hiding secret content.
+	for _, m := range cfg.MaskedPaths {
+		switch m.Type {
+		case Bind:
+			// Bind-type masked paths are not used; masks are always DevNull or EmptyRO.
+		case DevNull:
+			args = append(args, "-v", "/dev/null:"+m.Dest+":ro")
+		case EmptyRO:
+			args = append(args, "--tmpfs", m.Dest+":ro,size=0,mode=000")
+		}
 	}
 
 	for _, t := range cfg.Tmpfs {

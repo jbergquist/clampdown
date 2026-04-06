@@ -98,6 +98,7 @@ type AgentContainerConfig struct {
 	Image          string
 	Labels         map[string]string
 	Mounts         []MountSpec
+	MaskedPaths    []MountSpec // DevNull/EmptyRO overlays hiding secret content
 	Name           string
 	Resources      Resources
 	SeccompProfile string
@@ -112,6 +113,7 @@ type ProxyContainerConfig struct {
 	Env            map[string]string
 	Image          string
 	Labels         map[string]string
+	MaskedPaths    []MountSpec // DevNull/EmptyRO overlays hiding secret content
 	Name           string
 	Resources      Resources
 	SeccompProfile string

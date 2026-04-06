@@ -246,7 +246,7 @@ func Start(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Optio
 		}
 	}
 	sidecarCfg.Mounts = CredentialMounts(opts)
-	sidecarCfg.MaskedPaths = sidecarMasks
+	sidecarCfg.MaskedPaths = slices.Concat(sidecarMasks, hardenedMounts)
 
 	slog.Info("starting container sidecar")
 	err = rt.StartSidecar(ctx, sidecarCfg)
