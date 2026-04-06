@@ -273,10 +273,10 @@ func applyLandlock(p policy) error {
 // the process image is replaced.
 // Eliminates leaked runtime FDs (CVE-2024-21626 class) from reaching
 // the child process.
-func closeExtraFDs() {
+func closeExtraFDs() error {
 	entries, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
-		return
+		return fmt.Errorf("enumerate fds: %w", err)
 	}
 	for _, e := range entries {
 		fd, err := strconv.Atoi(e.Name())
@@ -285,6 +285,7 @@ func closeExtraFDs() {
 		}
 		syscall.CloseOnExec(fd)
 	}
+	return nil
 }
 
 func main() {
@@ -318,7 +319,9 @@ func main() {
 
 	// Close all file descriptors >= 3 before exec. Prevents leaked
 	// runtime FDs (CVE-2024-21626 class) from reaching the child process.
-	closeExtraFDs()
+	if err := closeExtraFDs(); err != nil {
+		fatalf("closeExtraFDs: %v", err)
+	}
 
 	err = syscall.Exec(binary, command, cleanEnv())
 	fatalf("exec %s: %v", binary, err)
