@@ -2,8 +2,10 @@
 # Install claude and podman-remote
 FROM alpine:3.23 AS builder
 
+# Pin claude-code version — update deliberately after testing.
+ARG CLAUDE_VERSION=2.1.92
 RUN apk add --no-cache bash curl nodejs podman-remote \
-    && curl -fsSL https://claude.ai/install.sh | bash
+    && CLAUDE_CODE_VERSION="${CLAUDE_VERSION}" curl -fsSL https://claude.ai/install.sh | bash
 
 # Network guidance helper — LD_PRELOAD .so for connect() firewall messages.
 FROM alpine:3.23 AS sandbox-network-helper
