@@ -36,6 +36,8 @@ var allowedBindSources = []string{
 	"/var/cache/containers",
 	"/var/lib/containers/storage",
 	"/var/run/containers/storage",
+	// buildah staging dirs for podman build
+	"/var/tmp",
 	// credential forwarding
 	"/run/credentials",
 }
