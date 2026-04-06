@@ -194,6 +194,7 @@ func init() {
 	if kNotif != goNotif || kResp != goResp {
 		fmt.Fprintf(os.Stderr, "seccomp-notif: struct size mismatch: kernel notif=%d/%d go=%d/%d\n",
 			kNotif, kResp, goNotif, goResp)
+		os.Exit(1)
 	}
 }
 
