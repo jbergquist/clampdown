@@ -821,9 +821,9 @@ func TestEgress(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "firewall.json")
 
 	t.Run("approved_registry_pull", func(t *testing.T) {
-		// quay.io is in policy.json and agent allowlist.
+		// ghcr.io is in policy.json and agent allowlist.
 		out, err := sidecarExec(t, sidecarName,
-			innerPull("quay.io/fedora/fedora:latest"))
+			innerPull("ghcr.io/containerd/busybox:1.36"))
 		requireSuccess(t, out, err)
 	})
 
