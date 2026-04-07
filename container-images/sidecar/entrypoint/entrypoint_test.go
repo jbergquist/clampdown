@@ -262,6 +262,47 @@ func TestIsSubPath(t *testing.T) {
 	}
 }
 
+func TestResolvePath_Absolute(t *testing.T) {
+	pid := uint32(os.Getpid())
+	got := resolvePath("/usr/bin", pid)
+	if got != "/usr/bin" {
+		t.Errorf("resolvePath(/usr/bin) = %q, want /usr/bin", got)
+	}
+}
+
+func TestResolvePath_Empty(t *testing.T) {
+	got := resolvePath("", uint32(os.Getpid()))
+	if got != "" {
+		t.Errorf("resolvePath(\"\") = %q, want \"\"", got)
+	}
+}
+
+func TestResolvePath_Symlink(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "real")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(tmp, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	pid := uint32(os.Getpid())
+	got := resolvePath(link, pid)
+	if got != target {
+		t.Errorf("resolvePath(%q) = %q, want %q (resolved symlink)", link, got, target)
+	}
+}
+
+func TestResolvePath_NonexistentFallback(t *testing.T) {
+	pid := uint32(os.Getpid())
+	got := resolvePath("/nonexistent/path", pid)
+	if got != "/nonexistent/path" {
+		t.Errorf("resolvePath(/nonexistent/path) = %q, want /nonexistent/path (fallback)", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Exec allowlist tests
 // ---------------------------------------------------------------------------
@@ -481,7 +522,7 @@ func TestIsAllowedBindSource(t *testing.T) {
 
 		// Temp dirs.
 		{"/tmp/buildah123", false},
-		{"/var/tmp/foo", false},
+		{"/var/tmp/foo", true},           // allowed for buildah staging
 
 		// Special rootfs files.
 		{"/sandbox-seal", true},

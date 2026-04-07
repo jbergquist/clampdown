@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -57,8 +58,8 @@ func exePath(pid uint32) string {
 	return result
 }
 
-// resolvePath cleans a path and resolves relative paths using the
-// process's cwd.
+// resolvePath cleans a path, resolves relative paths using the process's
+// cwd, and resolves symlinks through the process's mount namespace.
 func resolvePath(raw string, pid uint32) string {
 	if raw == "" {
 		return ""
@@ -69,7 +70,22 @@ func resolvePath(raw string, pid uint32) string {
 			raw = filepath.Join(cwd, raw)
 		}
 	}
-	return filepath.Clean(raw)
+	clean := filepath.Clean(raw)
+	// Resolve symlinks through /proc/<pid>/root to use the caller's
+	// mount namespace, not the supervisor's. Prevents symlink-to-
+	// protected-path bypass (kernel follows symlinks on mount/umount).
+	root, err := os.Readlink(fmt.Sprintf("/proc/%d/root", pid))
+	if err != nil {
+		return clean
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(root, clean))
+	if err != nil {
+		return clean
+	}
+	if root != "/" && strings.HasPrefix(resolved, root) {
+		return resolved[len(root):]
+	}
+	return resolved
 }
 
 // readPIDNS returns the PID namespace identifier for a process
