@@ -155,7 +155,7 @@ func runSupervisor(notifFD int, protected map[string]bool, workdir string, allow
 		case int32(unix.SYS_MOVE_MOUNT):
 			handleMoveMount(&notif, &resp, pid, protected, notifFD)
 		case int32(unix.SYS_OPEN_TREE):
-			handleOpenTree(&notif, &resp, pid, workdir, notifFD)
+			handleOpenTree(&notif, &resp, pid, workdir, myPIDNS, notifFD)
 		case int32(unix.SYS_FSOPEN):
 			handleFsopen(&notif, &resp, pid, myPIDNS, notifFD)
 		case int32(unix.SYS_FSCONFIG), int32(unix.SYS_FSMOUNT):

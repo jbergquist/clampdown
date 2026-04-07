@@ -270,35 +270,25 @@ func handleMoveMount(notif *seccompNotif, resp *seccompNotifResp, pid uint32, pr
 	}
 }
 
-// handleOpenTree blocks non-recursive open_tree clones of the workdir
-// or any ancestor. open_tree(dirfd, path, flags): arg1 = path, arg2 = flags.
-// A non-recursive OPEN_TREE_CLONE strips sub-mounts (like non-recursive bind),
-// exposing masked file contents at the detached mount.
-func handleOpenTree(notif *seccompNotif, resp *seccompNotifResp, pid uint32, workdir string, notifFD int) {
+// handleOpenTree blocks open_tree clones from the sidecar PID namespace.
+func handleOpenTree(notif *seccompNotif, resp *seccompNotifResp, pid uint32, workdir, myPIDNS string, notifFD int) {
 	flags := notif.Data.Args[2]
 
-	// Only care about OPEN_TREE_CLONE without AT_RECURSIVE.
-	if flags&unix.OPEN_TREE_CLONE == 0 || flags&unix.AT_RECURSIVE != 0 {
+	// Non-clone open_tree is harmless — just an O_PATH open.
+	if flags&unix.OPEN_TREE_CLONE == 0 {
 		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
 		return
 	}
 
-	path, err := readStringFromPID(pid, notif.Data.Args[1])
-	if err != nil {
+	// Block all OPEN_TREE_CLONE from sidecar PID namespace.
+	if isSidecarPIDNS(pid, myPIDNS) {
+		path, _ := readStringFromPID(pid, notif.Data.Args[1])
+		path = resolvePath(path, pid)
+		if !checkNotifValid(notifFD, &notif.ID) {
+			return
+		}
 		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED open_tree: cannot read path pid=%d: %v", pid, err)
-		return
-	}
-	path = resolvePath(path, pid)
-
-	if !checkNotifValid(notifFD, &notif.ID) {
-		return
-	}
-
-	// Block if path is the workdir or an ancestor of it.
-	if workdir != "" && (path == workdir || isSubPath(path, workdir)) {
-		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED open_tree(CLONE) path=%s pid=%d bin=%s (workdir ancestor clone)", path, pid, exePath(pid))
+		logf("BLOCKED open_tree(CLONE) path=%s pid=%d bin=%s (sidecar PID namespace)", path, pid, exePath(pid))
 		return
 	}
 
