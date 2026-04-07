@@ -295,29 +295,24 @@ func handleOpenTree(notif *seccompNotif, resp *seccompNotifResp, pid uint32, wor
 	resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
 }
 
-// handleFsopen blocks fsopen("proc") from the sidecar's PID namespace.
+// handleFsopen blocks fsopen from the sidecar's PID namespace.
 // fsopen(fsname, flags): arg0 = fsname string.
-// A new procfs filesystem context from the sidecar's PID namespace would
-// expose /proc/1/mem without the /dev/null mask.
+// No legitimate fsopen originates from the sidecar PID NS — crun calls
+// fsopen from nested container PID NS for overlay/proc/tmpfs setup.
 func handleFsopen(notif *seccompNotif, resp *seccompNotifResp, pid uint32, myPIDNS string, notifFD int) {
-	fsname, err := readStringFromPID(pid, notif.Data.Args[0])
-	if err != nil {
-		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED fsopen: cannot read fsname pid=%d: %v", pid, err)
+	if !isSidecarPIDNS(pid, myPIDNS) {
+		resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
 		return
 	}
+
+	fsname, _ := readStringFromPID(pid, notif.Data.Args[0])
 
 	if !checkNotifValid(notifFD, &notif.ID) {
 		return
 	}
 
-	if fsname == "proc" && isSidecarPIDNS(pid, myPIDNS) {
-		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED fsopen(proc) pid=%d bin=%s (sidecar PID namespace)", pid, exePath(pid))
-		return
-	}
-
-	resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+	resp.Error = -int32(unix.EPERM)
+	logf("BLOCKED fsopen(%s) pid=%d bin=%s (sidecar PID namespace)", fsname, pid, exePath(pid))
 }
 
 // ---------------------------------------------------------------------------
