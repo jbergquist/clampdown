@@ -722,6 +722,31 @@ func TestSealInject(t *testing.T) {
 // inside nested containers.
 // ---------------------------------------------------------------------------
 
+// pythonSyscallTemplate invokes a raw syscall via ctypes. Template args:
+// amd64 syscall number, arm64 syscall number. Exits 1 if blocked, 0 if
+// the syscall succeeded (a security violation).
+const pythonSyscallTemplate = `import ctypes, ctypes.util, platform, sys
+libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+libc.syscall.restype = ctypes.c_long
+nums = {'x86_64': %d, 'aarch64': %d}
+arch = platform.machine()
+if arch not in nums:
+    print('skip: unsupported arch ' + arch)
+    sys.exit(0)
+ret = libc.syscall(nums[arch])
+errno = ctypes.get_errno()
+if errno != 0:
+    print('blocked: errno=' + str(errno))
+    sys.exit(1)
+print('SECURITY VIOLATION: syscall succeeded')
+sys.exit(0)`
+
+type syscallCase struct {
+	name  string
+	amd64 int
+	arm64 int
+}
+
 func TestSyscallBlocking(t *testing.T) {
 	t.Parallel()
 
@@ -743,29 +768,6 @@ func TestSyscallBlocking(t *testing.T) {
 
 	// Python subtests: invoke raw syscalls via ctypes to verify seccomp
 	// blocks them at the kernel level. Uses python:alpine (pushed in TestMain).
-	//
-	// Template args: amd64 syscall number, arm64 syscall number.
-	const pythonSyscallTemplate = `import ctypes, ctypes.util, platform, sys
-libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
-libc.syscall.restype = ctypes.c_long
-nums = {'x86_64': %d, 'aarch64': %d}
-arch = platform.machine()
-if arch not in nums:
-    print('skip: unsupported arch ' + arch)
-    sys.exit(0)
-ret = libc.syscall(nums[arch])
-errno = ctypes.get_errno()
-if errno != 0:
-    print('blocked: errno=' + str(errno))
-    sys.exit(1)
-print('SECURITY VIOLATION: syscall succeeded')
-sys.exit(0)`
-
-	type syscallCase struct {
-		name  string
-		amd64 int
-		arm64 int
-	}
 	cases := []syscallCase{
 		{"bpf", 321, 280},
 		{"io_uring_setup", 425, 425},
@@ -1341,111 +1343,273 @@ func TestRootfsTampering(t *testing.T) {
 	})
 }
 
+// ---------------------------------------------------------------------------
+// SecurityAudit: comprehensive sandbox validation from inside nested containers.
+// ---------------------------------------------------------------------------
+
 func TestSecurityAudit(t *testing.T) {
-	t.Run("cdk", func(t *testing.T) {
-		// Detect architecture for the correct CDK binary.
-		archOut, archErr := sidecarExec(t, sidecarName, innerRun(nil, "uname", "-m"))
-		if archErr != nil {
-			t.Fatalf("detect arch: %v", archErr)
-		}
-		cdkArch := "amd64"
-		if strings.Contains(string(archOut), "aarch64") {
-			cdkArch = "arm64"
-		}
-		cdkURL := "https://github.com/cdk-team/CDK/releases/download/v1.5.3/cdk_linux_" + cdkArch
-		cmd := []string{
-			innerPodman, "run", "--rm", "--tmpfs", "/home/audit",
-			alpineImage, "sh", "-c",
-			"wget -q -O /home/audit/cdk " + cdkURL + " && " +
-				"chmod +x /home/audit/cdk && /home/audit/cdk evaluate --full 2>&1",
-		}
-		out, err := sidecarExecTimeout(t, sidecarName, cmd, 120*time.Second)
-		t.Log("\n" + string(out))
-		if err != nil {
-			t.Fatalf("cdk failed: %v", err)
-		}
-		output := string(out)
+	t.Parallel()
 
-		// 1. Tool completeness: verify key sections ran.
-		for _, section := range []string{
-			"Information Gathering - Commands and Capabilities",
-			"Information Gathering - Net Namespace",
-			"Information Gathering - Sysctl Variables",
-			"Information Gathering - ASLR",
-		} {
-			if !strings.Contains(output, section) {
-				t.Errorf("cdk: missing section %q — tool may not have completed", section)
+	// --- Capabilities
+
+	for _, tc := range []struct {
+		name, field string
+	}{
+		{"cap_effective_zero", "CapEff"},
+		{"cap_permitted_zero", "CapPrm"},
+		{"cap_inheritable_zero", "CapInh"},
+		{"cap_ambient_zero", "CapAmb"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out, err := sidecarExec(t, sidecarName,
+				innerRun(nil, "sh", "-c", "grep '^"+tc.field+":' /proc/self/status"))
+			requireSuccess(t, out, err)
+			if !strings.Contains(string(out), "0000000000000000") {
+				t.Errorf("%s not zero: %s", tc.field, strings.TrimSpace(string(out)))
 			}
-		}
+		})
+	}
 
-		// 2. Capabilities: zero effective/permitted/inheritable.
-		for _, expect := range []string{
-			"CapInh:\t0000000000000000",
-			"CapPrm:\t0000000000000000",
-			"CapEff:\t0000000000000000",
-		} {
-			if !strings.Contains(output, expect) {
-				t.Errorf("cdk: expected %q in output", expect)
-			}
-		}
-
-		// 3. No exploitable capabilities (CDK prints [!] CAP_ or
-		// "Critical -" when it finds exploitable caps).
-		for _, bad := range []string{
-			"[!] CAP_",
-			"Critical - SYS_ADMIN",
-			"Critical - Possible Privileged",
-			"Added capability list:",
-		} {
-			if strings.Contains(output, bad) {
-				t.Errorf("cdk: exploitable capability: %s", bad)
-			}
-		}
-
-		// 4. Network namespace must be isolated.
-		if !strings.Contains(output, "net namespace isolated") {
-			t.Error("cdk: expected net namespace isolated")
-		}
-
-		// 5. ASLR must be enabled.
-		if !strings.Contains(output, "ASLR is enabled") {
-			t.Error("cdk: expected ASLR enabled")
-		}
-
-		// 6. route_localnet must be 0 (CVE-2020-8558).
-		if strings.Contains(output, "route_localnet = 1") {
-			t.Error("cdk: route_localnet=1 (CVE-2020-8558)")
-		}
-
-		// 7. Cloud metadata APIs unreachable (private CIDRs blocked).
-		// CDK outputs "failed to dial" for each cloud API when blocked.
-		if strings.Contains(output, "Bindcloud") ||
-			strings.Contains(output, "Metadata API available") {
-			t.Error("cdk: cloud metadata API reachable")
-		}
-
-		// 8. K8s API server must forbid anonymous requests (or not exist).
-		if strings.Contains(output, "allows anonymous request") ||
-			strings.Contains(output, "have a high authority") {
-			t.Error("cdk: K8s anonymous auth or high-authority SA detected")
-		}
-
-		// 9. Sensitive files: no docker.sock, .ssh, .kube, serviceaccount.
-		for _, bad := range []string{
-			"/docker.sock - ",
-			"/.ssh/ - ",
-			"/.kube/ - ",
-			"/serviceaccount - ",
-		} {
-			if strings.Contains(output, bad) {
-				t.Errorf("cdk: sensitive file found: %s", bad)
-			}
-		}
-
-		// 10. No sensitive services detected in env/processes.
-		if strings.Contains(output, "sensitive env found") {
-			t.Error("cdk: sensitive environment variables detected")
+	t.Run("cap_bounding_limited", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c", "grep '^CapBnd:' /proc/self/status"))
+		requireSuccess(t, out, err)
+		s := strings.TrimSpace(string(out))
+		// Bitmask for 10 default caps (CHOWN, DAC_OVERRIDE, FOWNER, FSETID,
+		// KILL, NET_BIND_SERVICE, SETFCAP, SETGID, SETPCAP, SETUID).
+		if !strings.Contains(s, "00000000800005fb") {
+			t.Errorf("CapBnd unexpected: %s", s)
 		}
 	})
 
+	// --- Seccomp & MAC
+
+	t.Run("seccomp_filtering", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c", "grep '^Seccomp:' /proc/self/status"))
+		requireSuccess(t, out, err)
+		// Seccomp: 2 means SECCOMP_MODE_FILTER.
+		if !strings.Contains(string(out), "\t2") {
+			t.Errorf("seccomp not filtering: %s", strings.TrimSpace(string(out)))
+		}
+	})
+
+	t.Run("no_new_privs", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c", "grep '^NoNewPrivs:' /proc/self/status"))
+		requireSuccess(t, out, err)
+		if !strings.Contains(string(out), "\t1") {
+			t.Errorf("NoNewPrivs not set: %s", strings.TrimSpace(string(out)))
+		}
+	})
+
+	// --- Namespaces
+
+	t.Run("namespaces_isolated", func(t *testing.T) {
+		t.Parallel()
+		// Properly isolated PID namespace should show very few PIDs.
+		// Host PID namespace would show hundreds.
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c", "ls /proc | grep -c '^[0-9]'"))
+		requireSuccess(t, out, err)
+		n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+		if n > 20 {
+			t.Errorf("PID namespace may not be isolated: %d PIDs visible", n)
+		}
+	})
+
+	// --- Kernel params
+
+	t.Run("aslr_enabled", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "cat", "/proc/sys/kernel/randomize_va_space"))
+		requireSuccess(t, out, err)
+		if strings.TrimSpace(string(out)) != "2" {
+			t.Errorf("ASLR not fully enabled: %s", strings.TrimSpace(string(out)))
+		}
+	})
+
+	t.Run("route_localnet_zero", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "cat", "/proc/sys/net/ipv4/conf/all/route_localnet"))
+		requireSuccess(t, out, err)
+		if strings.TrimSpace(string(out)) != "0" {
+			t.Errorf("route_localnet not 0 (CVE-2020-8558): %s", strings.TrimSpace(string(out)))
+		}
+	})
+
+	// --- Filesystem
+
+	t.Run("read_only_rootfs", func(t *testing.T) {
+		t.Parallel()
+		_, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c", "touch /rootfs-write-test"))
+		if err == nil {
+			t.Error("rootfs is writable — touch /rootfs-write-test succeeded")
+		}
+	})
+
+	t.Run("no_raw_device_access", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c",
+				"for d in /dev/sda /dev/vda /dev/nvme0 /dev/dm-0; do "+
+					"test -e $d && echo FOUND:$d; done; echo DONE"))
+		requireSuccess(t, out, err)
+		if strings.Contains(string(out), "FOUND:") {
+			t.Errorf("raw device accessible: %s", strings.TrimSpace(string(out)))
+		}
+	})
+
+	t.Run("no_docker_socket", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c",
+				"test -e /var/run/docker.sock && echo FOUND || echo ABSENT"))
+		requireSuccess(t, out, err)
+		if strings.Contains(string(out), "FOUND") {
+			t.Error("docker socket exposed in container")
+		}
+	})
+
+	t.Run("proc_sys_read_only", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c",
+				"echo x > /proc/sys/kernel/hostname 2>&1 || echo BLOCKED"))
+		requireSuccess(t, out, err)
+		if !strings.Contains(string(out), "BLOCKED") &&
+			!strings.Contains(string(out), "Read-only") &&
+			!strings.Contains(string(out), "Permission denied") {
+			t.Error("/proc/sys is writable")
+		}
+	})
+
+	t.Run("cgroup_not_writable", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c",
+				"echo $$ > /sys/fs/cgroup/cgroup.procs 2>&1 || echo BLOCKED"))
+		requireSuccess(t, out, err)
+		if !strings.Contains(string(out), "BLOCKED") &&
+			!strings.Contains(string(out), "Permission denied") &&
+			!strings.Contains(string(out), "Read-only") {
+			t.Error("cgroup.procs is writable")
+		}
+	})
+
+	t.Run("core_dumps_disabled", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c", "ulimit -c"))
+		requireSuccess(t, out, err)
+		if strings.TrimSpace(string(out)) != "0" {
+			t.Errorf("core dumps not disabled: ulimit -c = %s", strings.TrimSpace(string(out)))
+		}
+	})
+
+	// --- Dangerous operations blocked
+	// Verify the operations FAIL at runtime, not just that tools are absent.
+
+	t.Run("dangerous_mount_blocked", func(t *testing.T) {
+		t.Parallel()
+		_, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "mount", "-t", "tmpfs", "none", "/mnt"))
+		if err == nil {
+			t.Error("mount succeeded — should be blocked by seccomp")
+		}
+	})
+
+	t.Run("dangerous_mknod_blocked", func(t *testing.T) {
+		t.Parallel()
+		_, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "mknod", "/tmp/testnode", "b", "8", "0"))
+		if err == nil {
+			t.Error("mknod succeeded — should be blocked by seccomp/device cgroup")
+		}
+	})
+
+	t.Run("dangerous_unshare_blocked", func(t *testing.T) {
+		t.Parallel()
+		_, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "unshare", "-m", "echo", "ok"))
+		if err == nil {
+			t.Error("unshare succeeded — should be blocked by seccomp")
+		}
+	})
+
+	t.Run("dangerous_chroot_blocked", func(t *testing.T) {
+		t.Parallel()
+		_, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "chroot", "/", "echo", "ok"))
+		if err == nil {
+			t.Error("chroot succeeded — should be blocked by seccomp")
+		}
+	})
+
+	// --- Syscall probing
+
+	auditSyscalls := []syscallCase{
+		{"keyctl", 250, 219},
+		{"kexec_load", 246, 104},
+		{"init_module", 175, 105},
+		{"open_by_handle_at", 304, 265},         // Shocker exploit (CVE-2014-3519)
+		{"name_to_handle_at", 303, 264},          // Shocker exploit prerequisite
+		{"pivot_root", 155, 41},
+	}
+	for _, tc := range auditSyscalls {
+		t.Run("syscall_"+tc.name+"_blocked", func(t *testing.T) {
+			t.Parallel()
+			pyCmd := fmt.Sprintf(pythonSyscallTemplate, tc.amd64, tc.arm64)
+			cmd := []string{innerPodman, "run", "--rm", pythonAlpineImage, "python3", "-c", pyCmd}
+			out, err := sidecarExec(t, sidecarName, cmd)
+			requireFail(t, out, err)
+			if bytes.Contains(out, []byte("SECURITY VIOLATION")) {
+				t.Fatalf("syscall %s was not blocked by seccomp", tc.name)
+			}
+		})
+	}
+
+	// --- Info leak
+
+	t.Run("sensitive_files_absent", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c",
+				"for f in /var/run/docker.sock $HOME/.ssh $HOME/.kube "+
+					"/run/secrets/kubernetes.io/serviceaccount; do "+
+					"test -e $f && echo FOUND:$f; done; echo DONE"))
+		requireSuccess(t, out, err)
+		if strings.Contains(string(out), "FOUND:") {
+			t.Errorf("sensitive files found: %s", strings.TrimSpace(string(out)))
+		}
+	})
+
+	t.Run("sensitive_env_clean", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c",
+				"env | grep -iE '^(KUBERNETES_|DOCKER_HOST=|SSH_AUTH_SOCK=)' || echo CLEAN"))
+		requireSuccess(t, out, err)
+		if !strings.Contains(string(out), "CLEAN") {
+			t.Errorf("sensitive env vars found: %s", strings.TrimSpace(string(out)))
+		}
+	})
+
+	t.Run("cloud_metadata_blocked", func(t *testing.T) {
+		t.Parallel()
+		// 169.254.169.254 is blocked by pod FORWARD chain (private CIDRs).
+		_, err := sidecarExec(t, sidecarName,
+			innerRun(nil, "sh", "-c",
+				"wget -q -O- -T 2 http://169.254.169.254/latest/meta-data/ 2>&1"))
+		if err == nil {
+			t.Error("cloud metadata API (169.254.169.254) reachable")
+		}
+	})
 }
