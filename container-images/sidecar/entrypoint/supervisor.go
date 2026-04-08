@@ -53,8 +53,7 @@ func readStringFromPID(pid uint32, addr uint64) (string, error) {
 
 // exePath returns the executable path for a process, or "" on error.
 func exePath(pid uint32) string {
-	result := ""
-	result, _ = os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	result, _ := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
 	return result
 }
 
@@ -147,20 +146,21 @@ func runSupervisor(notifFD int, protected map[string]bool, workdir string, allow
 		switch nr {
 		// Mount-family handlers.
 		case int32(unix.SYS_UMOUNT2):
-			handleUmount2(&notif, &resp, pid, protected, notifFD)
+			handleProtectedPathOp(&notif, &resp, pid, protected, notifFD, 0, int32(unix.EPERM), "umount2")
 		case int32(unix.SYS_MOUNT):
 			handleMount(&notif, &resp, pid, protected, workdir, myPIDNS, notifFD)
 		case int32(unix.SYS_MOUNT_SETATTR):
-			handleMountSetattr(&notif, &resp, pid, protected, notifFD)
+			handleProtectedPathOp(&notif, &resp, pid, protected, notifFD, 1, int32(unix.EPERM), "mount_setattr")
 		case int32(unix.SYS_MOVE_MOUNT):
-			handleMoveMount(&notif, &resp, pid, protected, notifFD)
+			handleProtectedPathOp(&notif, &resp, pid, protected, notifFD, 3, int32(unix.EPERM), "move_mount")
 		case int32(unix.SYS_OPEN_TREE):
-			handleOpenTree(&notif, &resp, pid, workdir, myPIDNS, notifFD)
+			handleOpenTree(&notif, &resp, pid, workdir, notifFD)
 		case int32(unix.SYS_FSOPEN):
-			handleFsopen(&notif, &resp, pid, myPIDNS, notifFD)
-		case int32(unix.SYS_FSCONFIG), int32(unix.SYS_FSMOUNT):
-			// Dangerous paths blocked at fsopen (procfs) and move_mount (target).
-			resp.Flags = unix.SECCOMP_USER_NOTIF_FLAG_CONTINUE
+			handleSidecarPIDNSBlock(&notif, &resp, pid, myPIDNS, notifFD, "fsopen")
+		case int32(unix.SYS_FSCONFIG):
+			handleSidecarPIDNSBlock(&notif, &resp, pid, myPIDNS, notifFD, "fsconfig")
+		case int32(unix.SYS_FSMOUNT):
+			handleSidecarPIDNSBlock(&notif, &resp, pid, myPIDNS, notifFD, "fsmount")
 
 		// PID 1 protection.
 		case int32(unix.SYS_PTRACE), int32(unix.SYS_PROCESS_VM_READV), int32(unix.SYS_PROCESS_VM_WRITEV):
@@ -176,9 +176,9 @@ func runSupervisor(notifFD int, protected map[string]bool, workdir string, allow
 		case int32(unix.SYS_OPENAT):
 			handleOpenat(&notif, &resp, pid, myPIDNS, notifFD)
 		case int32(unix.SYS_UNLINKAT):
-			handleUnlinkat(&notif, &resp, pid, protected, notifFD)
+			handleProtectedPathOp(&notif, &resp, pid, protected, notifFD, 1, int32(unix.EACCES), "unlinkat")
 		case int32(unix.SYS_SYMLINKAT):
-			handleSymlinkat(&notif, &resp, pid, protected, notifFD)
+			handleProtectedPathOp(&notif, &resp, pid, protected, notifFD, 2, int32(unix.EACCES), "symlinkat")
 		case int32(unix.SYS_LINKAT):
 			handleLinkat(&notif, &resp, pid, protected, notifFD)
 		case int32(unix.SYS_RENAMEAT2):

@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -337,6 +336,5 @@ func handleExecveat(
 
 // logExecAllowlist prints the allowlist summary at startup for the audit trail.
 func logExecAllowlist(count int) {
-	fmt.Fprintf(os.Stderr, "clampdown: %s seccomp-notif: exec allowlist: %d binaries hashed\n",
-		time.Now().UTC().Format(time.RFC3339), count)
+	logf("exec allowlist: %d binaries hashed", count)
 }
