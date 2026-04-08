@@ -159,6 +159,7 @@ var infraMountPrefixes = []string{
 // the <name>/_data structure.
 func isValidVolumeMount(source string) bool {
 	const prefix = "/var/lib/containers/storage/volumes/"
+	source = filepath.Clean(source)
 	if !strings.HasPrefix(source, prefix) {
 		return false
 	}
@@ -245,9 +246,9 @@ var canonicalSeccompPath = "/etc/containers/seccomp_nested.json"
 // seccompRule represents a single syscall rule for comparison.
 // Two rules match if they have the same action, sorted names, and args.
 type seccompRule struct {
-	Names    []string    `json:"names"`
-	Action   string      `json:"action"`
-	ErrnoRet *uint       `json:"errnoRet,omitempty"`
+	Names    []string     `json:"names"`
+	Action   string       `json:"action"`
+	ErrnoRet *uint        `json:"errnoRet,omitempty"`
 	Args     []seccompArg `json:"args,omitempty"`
 }
 
@@ -270,9 +271,9 @@ func seccompRuleKey(r seccompRule) string {
 	copy(names, r.Names)
 	slices.Sort(names)
 	data, _ := json.Marshal(struct {
-		Names    []string    `json:"n"`
-		Action   string      `json:"a"`
-		ErrnoRet *uint       `json:"e,omitempty"`
+		Names    []string     `json:"n"`
+		Action   string       `json:"a"`
+		ErrnoRet *uint        `json:"e,omitempty"`
 		Args     []seccompArg `json:"r,omitempty"`
 	}{names, r.Action, r.ErrnoRet, r.Args})
 	return string(data)

@@ -621,6 +621,36 @@ func TestSecurityPolicy(t *testing.T) {
 			innerRun([]string{"--ulimit", "core=1024:1024"}, "true"))
 		requireFail(t, out, err)
 	})
+
+	t.Run("checkMounts_volume_allowed", func(t *testing.T) {
+		t.Parallel()
+		// Named volumes are legitimate — create, mount, verify.
+		out, err := sidecarExec(t, sidecarName,
+			[]string{innerPodman, "volume", "create", "integ-test-vol"})
+		requireSuccess(t, out, err)
+		defer sidecarExec(t, sidecarName,
+			[]string{innerPodman, "volume", "rm", "integ-test-vol"})
+
+		out, err = sidecarExec(t, sidecarName,
+			innerRun([]string{"-v", "integ-test-vol:/data"}, "ls", "/data"))
+		requireSuccess(t, out, err)
+	})
+
+	t.Run("checkMounts_volume_traversal_blocked", func(t *testing.T) {
+		t.Parallel()
+		// Path traversal via _data/../../ must be rejected by the hook's
+		// isValidVolumeMount (cleaned path escapes the volume data dir).
+		out, err := sidecarExec(t, sidecarName,
+			[]string{innerPodman, "volume", "create", "integ-test-trav"})
+		requireSuccess(t, out, err)
+		defer sidecarExec(t, sidecarName,
+			[]string{innerPodman, "volume", "rm", "integ-test-trav"})
+
+		volPath := "/var/lib/containers/storage/volumes/integ-test-trav/_data/../../"
+		out, err = sidecarExec(t, sidecarName,
+			innerRun([]string{"-v", volPath + ":/escape"}, "ls", "/escape"))
+		requireFail(t, out, err)
+	})
 }
 
 // ---------------------------------------------------------------------------
