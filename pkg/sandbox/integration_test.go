@@ -823,9 +823,19 @@ func TestEgress(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "firewall.json")
 
 	t.Run("approved_registry_pull", func(t *testing.T) {
-		// ghcr.io is in policy.json and agent allowlist.
-		out, err := sidecarExec(t, sidecarName,
-			innerPull("ghcr.io/containerd/busybox:1.36"))
+		// ghcr.io is in policy.json and agent allowlist. Retry up to 5
+		// times — registry pulls are flaky (DNS hiccups, CDN timeouts).
+		var out []byte
+		var err error
+		for attempt := 1; attempt <= 5; attempt++ {
+			out, err = sidecarExec(t, sidecarName,
+				innerPull("ghcr.io/containerd/busybox:1.36"))
+			if err == nil {
+				break
+			}
+			t.Logf("attempt %d/5 failed: %v", attempt, err)
+			time.Sleep(5 * time.Second)
+		}
 		requireSuccess(t, out, err)
 	})
 
@@ -1559,8 +1569,8 @@ func TestSecurityAudit(t *testing.T) {
 		{"keyctl", 250, 219},
 		{"kexec_load", 246, 104},
 		{"init_module", 175, 105},
-		{"open_by_handle_at", 304, 265},         // Shocker exploit (CVE-2014-3519)
-		{"name_to_handle_at", 303, 264},          // Shocker exploit prerequisite
+		{"open_by_handle_at", 304, 265}, // Shocker exploit (CVE-2014-3519)
+		{"name_to_handle_at", 303, 264}, // Shocker exploit prerequisite
 		{"pivot_root", 155, 41},
 	}
 	for _, tc := range auditSyscalls {

@@ -14,7 +14,12 @@ import (
 // the agent's static allowlist before passing to the sidecar as env var.
 func ResolveAllowlist(domains []string) []string {
 	var out []string
-	resolver := net.DefaultResolver
+
+	// Pure-Go resolver bypasses system resolver caching (nscd,
+	// systemd-resolved). Each LookupHost call makes a fresh DNS query,
+	// which is essential for catching DNS round-robin rotation (e.g.
+	// ghcr.io alternates between two IPs per query).
+	resolver := &net.Resolver{PreferGo: true}
 
 	for _, entry := range domains {
 		// Already an IP — pass through.
@@ -33,16 +38,22 @@ func ResolveAllowlist(domains []string) []string {
 			out = append(out, entry)
 			continue
 		}
-		// Domain — resolve.
-		addrs, err := resolver.LookupHost(context.Background(), entry)
-		if err != nil {
-			slog.Warn("cannot resolve host", "host", entry, "error", err)
-			continue
-		}
-		for _, a := range addrs {
-			if net.ParseIP(a) != nil {
-				out = append(out, a)
+		// Domain — query multiple times to collect all round-robin IPs.
+		seen := make(map[string]bool)
+		for range 5 {
+			addrs, err := resolver.LookupHost(context.Background(), entry)
+			if err != nil {
+				continue
 			}
+			for _, a := range addrs {
+				if net.ParseIP(a) != nil && !seen[a] {
+					seen[a] = true
+					out = append(out, a)
+				}
+			}
+		}
+		if len(seen) == 0 {
+			slog.Warn("cannot resolve host", "host", entry)
 		}
 	}
 
