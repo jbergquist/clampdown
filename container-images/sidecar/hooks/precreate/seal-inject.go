@@ -281,6 +281,11 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	// Filter any existing SANDBOX_POLICY to prevent user override.
+	env = slices.DeleteFunc(env, func(e string) bool {
+		return strings.HasPrefix(e, policyEnv+"=")
+	})
 	env = append(env, policyEnv+"="+string(policyJSON))
 
 	// Add seal bind mount. Re-read raw mounts to preserve all fields.
