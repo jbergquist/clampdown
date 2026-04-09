@@ -197,7 +197,7 @@ func (p *Podman) AttachAgent(ctx context.Context, name string) error {
 
 func (p *Podman) StartAgent(ctx context.Context, cfg AgentContainerConfig) error {
 	args := []string{"run", "-d", "-ti", "--name", cfg.Name,
-		"--restart=unless-stopped",
+		"--restart=on-failure",
 		"--userns=keep-id",
 		"--network", "container:" + cfg.SidecarName,
 		"--cap-drop=ALL",

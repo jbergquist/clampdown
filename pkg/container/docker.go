@@ -245,7 +245,7 @@ func (d *Docker) StartAgent(ctx context.Context, cfg AgentContainerConfig) error
 	uidGID := uid + ":" + gid
 
 	args := []string{"run", "-d", "-ti", "--name", cfg.Name,
-		"--restart=unless-stopped",
+		"--restart=on-failure",
 		"--user", uidGID,
 		"--network", "container:" + cfg.SidecarName,
 		"--cap-drop=ALL",
