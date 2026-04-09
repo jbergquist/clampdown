@@ -375,7 +375,11 @@ func runAgent(agName string, cfg Config) ucli.ActionFunc {
 			Workdir:        workdir,
 		}
 
-		return sandbox.Run(ctx, rt, ag, opts)
+		sessionID, err := sandbox.Run(ctx, rt, ag, opts)
+		if sessionID != "" {
+			session.TeardownIfExited(ctx, rt, sessionID)
+		}
+		return err
 	}
 }
 
@@ -420,6 +424,7 @@ func attachSession(ctx context.Context, cmd *ucli.Command) error {
 		return err
 	}
 
+	sessionID := cmd.String("session")
 	opts := sandbox.Options{
 		EnableTripwire: cmd.Bool("tripwire"),
 		Workdir:        cmd.String("workdir"),
@@ -428,7 +433,9 @@ func attachSession(ctx context.Context, cmd *ucli.Command) error {
 		opts.Workdir, _ = os.Getwd()
 	}
 
-	return sandbox.Attach(ctx, rt, cmd.String("session"), opts)
+	err = sandbox.Attach(ctx, rt, sessionID, opts)
+	session.TeardownIfExited(ctx, rt, sessionID)
+	return err
 }
 
 func stopSession(ctx context.Context, cmd *ucli.Command) error {

@@ -76,13 +76,15 @@ func generateSessionID() string {
 
 // Run starts a new session and attaches to it. This is the default path
 // for `clampdown <agent>` — start everything, then connect the terminal.
-func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options) error {
+// Returns the session ID so the caller can perform post-attach lifecycle
+// cleanup (e.g., tear down infrastructure when the agent exits).
+func Run(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Options) (string, error) {
 	sessionID, err := Start(ctx, rt, ag, opts)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	return Attach(ctx, rt, sessionID, opts)
+	return sessionID, Attach(ctx, rt, sessionID, opts)
 }
 
 // Start creates all session containers (sidecar, proxy, agent) in detached

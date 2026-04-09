@@ -210,6 +210,27 @@ func Delete(ctx context.Context, rt container.Runtime, sessionID string) error {
 	return nil
 }
 
+// TeardownIfExited checks whether the session's agent has exited (vs. user
+// detached). If the agent is no longer running, it tears down the entire
+// session: dumps audit logs, stops all containers, removes them, and cleans
+// up session files. No-op if the agent is still running (detach case).
+func TeardownIfExited(ctx context.Context, rt container.Runtime, sessionID string) {
+	agent, err := FindAgent(ctx, rt, sessionID)
+	if err != nil {
+		return // session already gone
+	}
+	running, err := IsRunning(ctx, rt, sessionID, agent)
+	if err != nil || running {
+		return // agent still running (detached)
+	}
+
+	slog.Info("agent exited, tearing down session", "session", sessionID)
+	sandbox.DumpSessionAudit(ctx, rt, sessionID)
+	_ = Stop(ctx, rt, sessionID)
+	_ = Delete(ctx, rt, sessionID)
+	sandbox.CleanupSessionFiles(ctx, rt, sessionID)
+}
+
 // Print writes a formatted session table to stdout.
 func Print(sessions []Session) {
 	if len(sessions) == 0 {
