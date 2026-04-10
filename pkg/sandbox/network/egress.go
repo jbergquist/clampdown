@@ -40,7 +40,7 @@ func ResolveAllowlist(domains []string) []string {
 		}
 		// Domain — query multiple times to collect all round-robin IPs.
 		seen := make(map[string]bool)
-		for range 5 {
+		for range 20 {
 			addrs, err := resolver.LookupHost(context.Background(), entry)
 			if err != nil {
 				continue
