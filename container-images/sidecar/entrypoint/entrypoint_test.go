@@ -494,6 +494,50 @@ func TestReadPPID_Missing(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Filesystem type allowlist tests
+// ---------------------------------------------------------------------------
+
+func TestAllowedFsTypes(t *testing.T) {
+	tests := []struct {
+		fstype string
+		want   bool
+	}{
+		// Legitimate crun types.
+		{"cgroup2", true},
+		{"devpts", true},
+		{"mqueue", true},
+		{"overlay", true},
+		{"sysfs", true},
+		{"tmpfs", true},
+
+		// Propagation changes (mount --make-rshared).
+		{"none", true},
+
+		// proc intentionally blocked (exposes /proc/1/mem).
+		{"proc", false},
+
+		// not used types that must be blocked to avoid host disk/device
+		// remounts to get info escaping.
+		{"btrfs", false},
+		{"devtmpfs", false},
+		{"ext4", false},
+		{"fuse", false},
+		{"nfs", false},
+		{"xfs", false},
+
+		// Empty fstype (bind/remount) — not checked via allowlist,
+		// but verify the map returns false for it.
+		{"", false},
+	}
+	for _, tt := range tests {
+		got := allowedFsTypes[tt.fstype]
+		if got != tt.want {
+			t.Errorf("allowedFsTypes[%q] = %v, want %v", tt.fstype, got, tt.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Bind mount source allowlist tests
 // ---------------------------------------------------------------------------
 

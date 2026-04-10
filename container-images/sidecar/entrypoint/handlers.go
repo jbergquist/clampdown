@@ -75,6 +75,19 @@ func isAllowedBindSource(source, workdir string) bool {
 	return slices.Contains(allowedBindSourceFiles, source)
 }
 
+// allowedFsTypes lists filesystem types permitted for non-bind mounts
+// from the sidecar PID namespace. crun only uses these types during
+// container setup.
+var allowedFsTypes = map[string]bool{
+	"cgroup2": true,
+	"devpts":  true,
+	"mqueue":  true,
+	"none":    true,
+	"overlay": true,
+	"sysfs":   true,
+	"tmpfs":   true,
+}
+
 // proc1Sensitive lists /proc/1 sub-paths that must never be opened from
 // sidecar processes. Defense-in-depth behind the /dev/null mask on
 // /proc/1/mem and the mount supervisor blocking unmounts.
@@ -214,13 +227,13 @@ func handleMount(
 		}
 	}
 
-	// Block procfs mounts from the sidecar's PID namespace. A new procfs
-	// mount exposes /proc/1/mem without the /dev/null mask. Nested
-	// container processes (different PID namespace) are allowed -- their
-	// procfs only shows their own PID namespace, not the sidecar's PID 1.
-	if fstype == "proc" && isSidecarPIDNS(pid, myPIDNS) {
+	// Block non-bind mounts with disallowed filesystem types from the
+	// sidecar PID namespace.
+	if fstype != "" && flags&unix.MS_BIND == 0 && flags&unix.MS_REMOUNT == 0 &&
+		isSidecarPIDNS(pid, myPIDNS) && !allowedFsTypes[fstype] {
 		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED mount(proc) target=%s pid=%d bin=%s (sidecar PID namespace)", target, pid, exePath(pid))
+		logf("BLOCKED mount(fstype=%s) target=%s pid=%d bin=%s (fstype not allowed)",
+			fstype, target, pid, exePath(pid))
 		return
 	}
 
