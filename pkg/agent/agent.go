@@ -23,6 +23,7 @@ type ProxyRoute struct {
 	HeaderPrefix   string
 	BaseURLEnv     string
 	ProviderID     string
+	OAuth          bool
 }
 
 // Agent describes an AI tool that runs inside the sandbox.

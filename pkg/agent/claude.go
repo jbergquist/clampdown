@@ -59,6 +59,15 @@ func (c *Claude) ProxyRoutes() []ProxyRoute {
 			HeaderName: "x-api-key",
 			BaseURLEnv: "ANTHROPIC_BASE_URL",
 		},
+		{
+			Port:         ProxyPort,
+			Upstream:     "https://api.anthropic.com",
+			KeyEnv:       "CLAUDE_CODE_OAUTH_TOKEN",
+			HeaderName:   "Authorization",
+			HeaderPrefix: "Bearer ",
+			BaseURLEnv:   "ANTHROPIC_BASE_URL",
+			OAuth:        true,
+		},
 	}
 }
 
