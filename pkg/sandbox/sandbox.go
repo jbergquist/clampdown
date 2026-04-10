@@ -543,12 +543,14 @@ func warnIfRootful(ctx context.Context, rt container.Runtime) {
 // since host kernel state is irrelevant in that case.
 func runPreflightChecks(ctx context.Context, rt container.Runtime) error {
 	if rt.IsDockerDesktop(ctx) {
-		return errors.New("docker Desktop is not supported.\n" +
-			"  Its fakeowner filesystem is incompatible with Landlock.\n" +
-			"  Leading to a degraded security posture for the sandbox.\n" +
-			"  Use one of:\n" +
-			"    colima start && docker context use colima\n" +
-			"    podman machine start (and use podman runtime)")
+		fmt.Fprintf(os.Stderr, "\n"+
+			"  Docker Desktop is not supported.\n"+
+			"  Its fakeowner filesystem is incompatible with Landlock,\n"+
+			"  leading to a degraded security posture for the sandbox.\n"+
+			"  Use one of:\n"+
+			"    colima start && docker context use colima\n"+
+			"    podman machine start (and use podman runtime)\n\n")
+		return errors.New("docker Desktop is not supported (see above)")
 	}
 
 	native, err := rt.IsNative(ctx)
@@ -565,9 +567,7 @@ func runPreflightChecks(ctx context.Context, rt container.Runtime) error {
 		return err
 	}
 
-	checkYama()
-
-	return nil
+	return checkYama()
 }
 
 // CheckLandlock verifies Landlock LSM is available on the host kernel.
@@ -622,7 +622,7 @@ func kernelVersion() (int, int) {
 // still restricts ptrace to descendants only.
 //
 // Advisory only — never blocks startup.
-func checkYama() {
+func checkYama() error {
 	scope, err := os.ReadFile("/proc/sys/kernel/yama/ptrace_scope")
 	if err != nil {
 		// Yama not present or /proc not accessible.
@@ -631,15 +631,27 @@ func checkYama() {
 			"  ptrace is blocked by seccomp, but Yama provides independent\n"+
 			"  defense-in-depth against ptrace-based escapes.\n"+
 			"  Enable Yama: boot with lsm=...,yama or set CONFIG_SECURITY_YAMA=y.\n\n")
-		return
+		return nil
 	}
 
 	val := strings.TrimSpace(string(scope))
-	if val == "0" {
+
+	if val == "3" {
 		fmt.Fprintf(os.Stderr, "\n"+
-			"  ⚠️  Yama ptrace_scope is 0 (permissive).\n"+
-			"  Any same-UID process can ptrace any other.\n"+
-			"  ptrace is blocked by seccomp, but Yama is independent defense-in-depth.\n"+
-			"  Recommend: echo 1 > /proc/sys/kernel/yama/ptrace_scope\n\n")
+			"  yama ptrace_scope is 3 (no-attach).\n"+
+			"  The seccomp-notif supervisor reads syscall arguments from\n"+
+			"  /proc/<pid>/mem, which requires ptrace access. yama=3 blocks\n"+
+			"  ALL cross-process memory reads — even with CAP_SYS_PTRACE.\n"+
+			"  This disables the supervisor's path-based security checks\n"+
+			"  (bind source allowlist, exec allowlist, protected paths, firewall lock).\n\n"+
+			"  Set ptrace_scope to 1 or 2:\n"+
+			"    echo 1 > /proc/sys/kernel/yama/ptrace_scope   (relational — parent can trace children)\n"+
+			"    echo 2 > /proc/sys/kernel/yama/ptrace_scope   (capability — requires CAP_SYS_PTRACE)\n\n"+
+			"  Both are compatible with clampdown. yama=1 is the recommended default.\n"+
+			"  Note: yama=3 is write-once — if already set, a reboot with\n"+
+			"  kernel.yama.ptrace_scope=1 in sysctl.conf is required.\n\n")
+		return errors.New("yama ptrace_scope=3 is incompatible with the seccomp-notif supervisor (see above)")
 	}
+
+	return nil
 }
