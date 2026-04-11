@@ -290,7 +290,8 @@ func checkSeccomp(config Config) error {
 		return blocked(int(syscall.EPERM), "cannot read canonical seccomp profile: %v", err)
 	}
 	var canonicalProfile seccompProfile
-	if err := json.Unmarshal(canonicalData, &canonicalProfile); err != nil {
+	err = json.Unmarshal(canonicalData, &canonicalProfile)
+	if err != nil {
 		return blocked(int(syscall.EPERM), "cannot parse canonical seccomp profile: %v", err)
 	}
 
@@ -304,7 +305,8 @@ func checkSeccomp(config Config) error {
 
 	// Parse the container's profile.
 	var containerProfile seccompProfile
-	if err := json.Unmarshal(*config.Linux.Seccomp, &containerProfile); err != nil {
+	err = json.Unmarshal(*config.Linux.Seccomp, &containerProfile)
+	if err != nil {
 		return blocked(int(syscall.EPERM), "invalid seccomp profile: %v", err)
 	}
 

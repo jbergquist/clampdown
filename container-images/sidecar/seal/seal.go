@@ -319,7 +319,8 @@ func main() {
 
 	// Close all file descriptors >= 3 before exec. Prevents leaked
 	// runtime FDs (CVE-2024-21626 class) from reaching the child process.
-	if err := closeExtraFDs(); err != nil {
+	err = closeExtraFDs()
+	if err != nil {
 		fatalf("closeExtraFDs: %v", err)
 	}
 

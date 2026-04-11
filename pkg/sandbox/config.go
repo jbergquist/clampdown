@@ -383,10 +383,12 @@ func ensureClaudeOnboarding(path string) {
 // resolveKey looks up an API key by name, checking the host environment
 // first, then rcEnv (.clampdownrc). Returns the value and true if found.
 func resolveKey(name string, rcEnv map[string]string) (string, bool) {
-	if v := os.Getenv(name); v != "" {
+	v := os.Getenv(name)
+	if v != "" {
 		return v, true
 	}
-	if v := rcEnv[name]; v != "" {
+	v = rcEnv[name]
+	if v != "" {
 		return v, true
 	}
 	return "", false

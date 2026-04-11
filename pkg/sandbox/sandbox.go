@@ -488,7 +488,8 @@ func sessionWorkdir(ctx context.Context, rt container.Runtime, sessionID string)
 		return "", err
 	}
 	for _, info := range infos {
-		if w := info.Labels["clampdown.workdir"]; w != "" {
+		w := info.Labels["clampdown.workdir"]
+		if w != "" {
 			return w, nil
 		}
 	}
@@ -631,7 +632,7 @@ func checkYama() error {
 			"  ptrace is blocked by seccomp, but Yama provides independent\n"+
 			"  defense-in-depth against ptrace-based escapes.\n"+
 			"  Enable Yama: boot with lsm=...,yama or set CONFIG_SECURITY_YAMA=y.\n\n")
-		return nil
+		return nil //nolint:nilerr // advisory only, never blocks startup
 	}
 
 	val := strings.TrimSpace(string(scope))
