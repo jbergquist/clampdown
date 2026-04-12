@@ -225,10 +225,10 @@ func TeardownIfExited(ctx context.Context, rt container.Runtime, sessionID strin
 	}
 
 	slog.Info("agent exited, tearing down session", "session", sessionID)
+	sandbox.CleanupSessionFiles(ctx, rt, sessionID)
 	sandbox.DumpSessionAudit(ctx, rt, sessionID)
 	_ = Stop(ctx, rt, sessionID)
 	_ = Delete(ctx, rt, sessionID)
-	sandbox.CleanupSessionFiles(ctx, rt, sessionID)
 }
 
 // Print writes a formatted session table to stdout.

@@ -445,6 +445,7 @@ func stopSession(ctx context.Context, cmd *ucli.Command) error {
 	}
 	sessionID := cmd.String("session")
 	sandbox.DumpSessionAudit(ctx, rt, sessionID)
+	sandbox.CleanupSessionFiles(ctx, rt, sessionID)
 	return session.Stop(ctx, rt, sessionID)
 }
 
