@@ -19,7 +19,8 @@
 #include <unistd.h>
 
 static const char guidance[] =
-	"  podman run --rm -v \"$PWD\":\"$PWD\" -w \"$PWD\" IMAGE COMMAND\n";
+	"  podman run --rm -v \"$PWD\":\"$PWD\" -w \"$PWD\" IMAGE COMMAND\n"
+	"For detailed guidance: /clampdown\n";
 
 static int is_blocked_error(int err)
 {

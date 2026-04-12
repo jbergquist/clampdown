@@ -138,6 +138,12 @@ func Start(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Optio
 		return "", fmt.Errorf("sandbox prompt: %w", err)
 	}
 
+	// Write cross-platform skills to both .claude/skills/ and .agents/skills/.
+	err = WriteSkills(ag, p.Home)
+	if err != nil {
+		return "", fmt.Errorf("write skills: %w", err)
+	}
+
 	// Build protection mounts (must happen before cleanup is defined).
 	protection := mounts.MergeProtection(opts.AllowHooks)
 	for _, raw := range opts.ProtectPaths {

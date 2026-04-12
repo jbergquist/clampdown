@@ -552,7 +552,7 @@ sandbox walls repeatedly. ECONNREFUSED doesn't tell an agent *why* the
 connection was refused or *what to do instead*. These helpers translate
 kernel errors into actionable instructions at the point of failure.
 
-**Three layers, one message: "use containers."**
+**Four layers, one message: "use containers."**
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -562,6 +562,13 @@ kernel errors into actionable instructions at the point of failure.
 │  (WebFetch, webfetch, web_fetch, read_url). Maps error codes     │
 │  to actions. Read by the model at conversation start.            │
 │  Weakest layer -- agents forget under context pressure.          │
+├──────────────────────────────────────────────────────────────────┤
+│  CLAMPDOWN SKILL  (~/.claude/skills/clampdown/ + ~/.agents/...)  │
+│                                                                  │
+│  Cross-platform skill (AgentSkills.io). Written at session start │
+│  to both directories for Claude Code, Codex, Gemini, OpenCode.   │
+│  Invocable via /clampdown when agent forgets constraints.        │
+│  Auto-invoke triggers on ECONNREFUSED, permission denied, etc.   │
 ├──────────────────────────────────────────────────────────────────┤
 │  COMMAND HELPER  (sandbox_command_helper.sh, via BASH_ENV)       │
 │                                                                  │
@@ -579,9 +586,9 @@ kernel errors into actionable instructions at the point of failure.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-All three layers return the same error code unchanged. They never modify
-program behavior -- only print additional stderr messages. Removing them
-changes nothing about what the agent can or cannot do.
+Prompt and skill are AI-level guidance. Helpers are OS-level fallbacks.
+All layers return error codes unchanged -- they add guidance, not behavior.
+Removing them changes nothing about what the agent can or cannot do.
 
 ---
 

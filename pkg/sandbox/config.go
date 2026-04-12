@@ -358,6 +358,33 @@ func WriteSandboxPrompt(ag agent.Agent, homeDir string) error {
 	return os.WriteFile(hostPath, []byte(prompt), 0o644)
 }
 
+// WriteSkills writes the clampdown skill to both .claude/skills/ and .agents/skills/
+// directories for cross-platform agent discovery.
+func WriteSkills(ag agent.Agent, homeDir string) error {
+	skill := agent.SandboxSkill(ag.Name())
+
+	for _, dir := range agent.SkillDirs() {
+		skillDir := filepath.Join(homeDir, dir, agent.SkillName)
+		skillPath := filepath.Join(skillDir, "SKILL.md")
+
+		// Write only if missing or content changed.
+		existing, readErr := os.ReadFile(skillPath)
+		if readErr == nil && string(existing) == skill {
+			continue
+		}
+
+		err := os.MkdirAll(skillDir, 0o750)
+		if err != nil {
+			return fmt.Errorf("create skill dir %s: %w", skillDir, err)
+		}
+		err = os.WriteFile(skillPath, []byte(skill), 0o644)
+		if err != nil {
+			return fmt.Errorf("write skill %s: %w", skillPath, err)
+		}
+	}
+	return nil
+}
+
 // ensureClaudeOnboarding makes sure .claude.json has hasCompletedOnboarding: true.
 // Reads existing file if present, sets the key if missing, writes back.
 func ensureClaudeOnboarding(path string) {
