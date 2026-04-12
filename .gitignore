@@ -16,9 +16,5 @@ future
 .claude
 .cache
 .home
-.sidecar.stamp
-.claude.stamp
-.codex.stamp
-.gemini.stamp
-.opencode.stamp
+.*.stamp
 tags
