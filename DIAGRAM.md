@@ -238,25 +238,26 @@ podman run ...
                    │
                    ▼
 ┌─────────────────────────────────────────────────┐
-│  CREATERUNTIME: security-policy (17 checks)     │
+│  CREATERUNTIME: security-policy (18 checks)     │
 │                                                 │
 │   1. checkCaps             -> EPERM             │
 │   2. checkSeccomp (rules match canonical) EPERM │
 │   3. checkNoNewPrivileges  -> EPERM             │
-│   4. checkNamespaces       -> EOPNOTSUPP        │
-│   5. checkMounts           -> EACCES            │
-│   6. checkMountOptions     -> EACCES            │
-│   7. checkMountPropagation -> EPERM             │
-│   8. checkRootfsPropagation-> EPERM             │
-│   9. checkDevices          -> EACCES            │
-│  10. checkMaskedPaths      -> EPERM             │
-│  11. checkReadonlyPaths    -> EPERM             │
-│  12. checkSysctl           -> EPERM             │
-│  13. checkRlimits          -> EPERM             │
-│  14. checkImageRef         -> EACCES/warn       │
-│  15. checkMountReadonly    -> EACCES            │
-│  16. checkProcMount        -> EPERM             │
-│  17. checkAdditionalGids   -> EPERM             │
+│   4. checkMACDisabled      -> EPERM             │
+│   5. checkNamespaces       -> EOPNOTSUPP        │
+│   6. checkMounts           -> EACCES            │
+│   7. checkMountOptions     -> EACCES            │
+│   8. checkMountPropagation -> EPERM             │
+│   9. checkRootfsPropagation-> EPERM             │
+│  10. checkDevices          -> EACCES            │
+│  11. checkMaskedPaths      -> EPERM             │
+│  12. checkReadonlyPaths    -> EPERM             │
+│  13. checkSysctl           -> EPERM             │
+│  14. checkRlimits          -> EPERM             │
+│  15. checkImageRef         -> EACCES/warn       │
+│  16. checkMountReadonly    -> EACCES            │
+│  17. checkProcMount        -> EPERM             │
+│  18. checkAdditionalGids   -> EPERM             │
 └──────────────────┬──────────────────────────────┘
                    │
      container process starts

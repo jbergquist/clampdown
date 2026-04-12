@@ -440,6 +440,21 @@ func checkNoNewPrivileges(config Config) error {
 	return nil
 }
 
+// checkMACDisabled blocks containers that disable Mandatory Access Control.
+func checkMACDisabled(config Config) error {
+	labelOpt := config.Annotations["io.podman.annotations.label"]
+	if labelOpt == "disable" {
+		return blocked(int(syscall.EPERM),
+			"--security-opt label=disable not permitted in nested containers")
+	}
+	apparmorOpt := config.Annotations["io.podman.annotations.apparmor"]
+	if apparmorOpt == "unconfined" {
+		return blocked(int(syscall.EPERM),
+			"--security-opt apparmor=unconfined not permitted in nested containers")
+	}
+	return nil
+}
+
 func checkReadonlyPaths(config Config) error {
 	if len(config.Process.Args) == 0 || config.Process.Args[0] != "/.sandbox/seal" {
 		return nil
@@ -804,6 +819,7 @@ func main() {
 		checkCaps,
 		checkSeccomp,
 		checkNoNewPrivileges,
+		checkMACDisabled,
 		checkNamespaces,
 		checkMounts,
 		checkMountOptions,

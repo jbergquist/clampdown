@@ -230,6 +230,41 @@ func TestCheckNoNewPrivileges_Block_False(t *testing.T) {
 	}
 }
 
+func TestCheckMACDisabled_Pass_NoAnnotation(t *testing.T) {
+	c := baseConfig()
+	err := checkMACDisabled(c)
+	if err != nil {
+		t.Errorf("expected pass with no annotations, got: %v", err)
+	}
+}
+
+func TestCheckMACDisabled_Block_SELinuxDisable(t *testing.T) {
+	c := baseConfig()
+	c.Annotations = map[string]string{"io.podman.annotations.label": "disable"}
+	err := checkMACDisabled(c)
+	if err == nil {
+		t.Fatal("expected error for label=disable")
+	}
+}
+
+func TestCheckMACDisabled_Block_AppArmorUnconfined(t *testing.T) {
+	c := baseConfig()
+	c.Annotations = map[string]string{"io.podman.annotations.apparmor": "unconfined"}
+	err := checkMACDisabled(c)
+	if err == nil {
+		t.Fatal("expected error for apparmor=unconfined")
+	}
+}
+
+func TestCheckMACDisabled_Pass_SELinuxType(t *testing.T) {
+	c := baseConfig()
+	c.Annotations = map[string]string{"io.podman.annotations.label": "type:container_t"}
+	err := checkMACDisabled(c)
+	if err != nil {
+		t.Errorf("expected pass for label=type:container_t, got: %v", err)
+	}
+}
+
 func TestCheckNamespaces_MissingPid(t *testing.T) {
 	c := baseConfig()
 	c.Linux.Namespaces = c.Linux.Namespaces[1:] // remove pid
@@ -904,6 +939,7 @@ func TestAllChecksPass(t *testing.T) {
 		{"caps", checkCaps},
 		{"seccomp", checkSeccomp},
 		{"noNewPrivileges", checkNoNewPrivileges},
+		{"macDisabled", checkMACDisabled},
 		{"namespaces", checkNamespaces},
 		{"mounts", checkMounts},
 		{"mountOptions", checkMountOptions},

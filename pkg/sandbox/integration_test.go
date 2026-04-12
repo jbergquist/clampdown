@@ -545,6 +545,20 @@ func TestSecurityPolicy(t *testing.T) {
 		requireFail(t, out, err)
 	})
 
+	t.Run("checkMACDisabled_label", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun([]string{"--security-opt", "label=disable"}, "true"))
+		requireFail(t, out, err)
+	})
+
+	t.Run("checkMACDisabled_apparmor", func(t *testing.T) {
+		t.Parallel()
+		out, err := sidecarExec(t, sidecarName,
+			innerRun([]string{"--security-opt", "apparmor=unconfined"}, "true"))
+		requireFail(t, out, err)
+	})
+
 	t.Run("checkNamespaces_pid", func(t *testing.T) {
 		t.Parallel()
 		out, err := sidecarExec(t, sidecarName,
