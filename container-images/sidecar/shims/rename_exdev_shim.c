@@ -103,15 +103,24 @@ static int copy_reg_and_unlink(const char *src, const char *dst)
 		goto fail_src;
 	}
 
-	n = snprintf(tmppath, sizeof(tmppath), "%s.exdev.%d", dst,
-		     (int)getpid());
+	/* Use PID + random suffix to prevent symlink pre-creation attacks.
+	 * O_EXCL fails if path exists; O_NOFOLLOW rejects symlinks.
+	 * Direct syscall: shim is built with -nostdlib. */
+	unsigned int rand_suffix;
+	if (syscall(SYS_getrandom, &rand_suffix, sizeof(rand_suffix), 0) < 0) {
+		err = errno;
+		goto fail_src;
+	}
+	n = snprintf(tmppath, sizeof(tmppath), "%s.exdev.%d.%08x", dst,
+		     (int)getpid(), rand_suffix);
 	if (n < 0 || (size_t)n >= sizeof(tmppath)) {
 		err = ENAMETOOLONG;
 		goto fail_src;
 	}
 
-	/* Create with 0600; fchmod below sets the real mode, defeating umask. */
-	dstfd = open(tmppath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	/* Create with 0600; fchmod below sets the real mode, defeating umask.
+	 * O_EXCL + O_NOFOLLOW: fail on existing path or symlink (CWE-367). */
+	dstfd = open(tmppath, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
 	if (dstfd < 0) {
 		err = errno;
 		goto fail_src;
