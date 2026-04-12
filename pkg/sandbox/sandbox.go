@@ -175,6 +175,9 @@ func Start(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Optio
 		return "", fmt.Errorf("build mounts: %w", err)
 	}
 
+	// Update .git/info/exclude so placeholder files don't show as untracked.
+	UpdateGitExclude(opts.Workdir, opts.ProtectPaths, opts.MaskPaths)
+
 	// Ensure agent TMPDIR exists in persistent HOME (Bun extracts .so here).
 	tmpdir := ag.Env()["TMPDIR"]
 	if tmpdir != "" {
