@@ -674,7 +674,7 @@ Base images pinned by SHA256 digest.
 |-------|------|-------|
 | Sidecar | /entrypoint | Go, static (seccomp-notif supervisor, 20 syscalls, CID-scoped mount allowlist) |
 | Sidecar | /sandbox-seal | Go, static (go-landlock, x/sys, psx) |
-| Sidecar | /rename_exdev_shim.so | C, musl -nostdlib |
+| Sidecar | /rename_exdev_shim.so | C, musl -nostdlib (O_EXCL+O_NOFOLLOW+random suffix) |
 | Sidecar | seal-inject, security-policy | Go, static, stdlib only |
 | Sidecar | /usr/local/bin/podman | podman-static v5.8.1 (fuse-overlayfs removed) |
 | Proxy | /usr/local/bin/auth-proxy | Go, static, stdlib only |
