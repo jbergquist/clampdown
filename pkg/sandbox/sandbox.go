@@ -68,10 +68,13 @@ type SessionState struct {
 }
 
 // generateSessionID returns a 6-character random hex string.
-func generateSessionID() string {
+func generateSessionID() (string, error) {
 	var b [3]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+	_, err := rand.Read(b[:])
+	if err != nil {
+		return "", fmt.Errorf("generate session ID: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 // Run starts a new session and attaches to it. This is the default path
@@ -127,7 +130,10 @@ func Start(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Optio
 
 	rt.CleanStale(ctx, containerPrefix)
 
-	sessionID := generateSessionID()
+	sessionID, err := generateSessionID()
+	if err != nil {
+		return "", err
+	}
 	sidecarName := fmt.Sprintf("%s-%s-sidecar", containerPrefix, sessionID)
 	agentName := fmt.Sprintf("%s-%s-%s", containerPrefix, sessionID, ag.Name())
 
@@ -236,12 +242,22 @@ func Start(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Optio
 			names = append(names, proxyName)
 		}
 		names = append(names, sidecarName)
-		_ = rt.Stop(context.Background(), names...)
-		_ = rt.Remove(context.Background(), names...)
-		for _, c := range created {
-			_ = os.RemoveAll(c)
+
+		err = rt.Stop(context.Background(), names...)
+		if err != nil {
+			slog.Debug("rollback: stop failed", "error", err)
 		}
-		_ = os.Remove(sessionStatePath(p.State, sessionID))
+		err = rt.Remove(context.Background(), names...)
+		if err != nil {
+			slog.Debug("rollback: remove failed", "error", err)
+		}
+		for _, c := range created {
+			err = os.RemoveAll(c)
+			if err != nil {
+				slog.Debug("rollback: cleanup failed", "path", c, "error", err)
+			}
+		}
+		_ = os.Remove(sessionStatePath(p.State, sessionID)) // Best effort
 	}
 
 	sidecarCfg := sidecarConfig(sidecarName, sessionID, opts, p, sidecarSeccomp, ag, masked)

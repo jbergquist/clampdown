@@ -57,7 +57,10 @@ func (d *Docker) probe() {
 		defer cancel()
 		out, err := d.command(ctx, "info", "-f", "json").Output()
 		if err == nil {
-			_ = json.Unmarshal(out, &d.daemonInfo)
+			err = json.Unmarshal(out, &d.daemonInfo)
+			if err != nil {
+				slog.Warn("parse docker daemon info", "error", err)
+			}
 		}
 		d.native = UnameRelease() != "" && d.daemonInfo.KernelVersion == UnameRelease()
 		d.selinux = slices.Contains(d.daemonInfo.SecurityOptions, "name=selinux")
@@ -383,6 +386,7 @@ func (d *Docker) List(ctx context.Context, labels map[string]string) ([]Info, er
 		}
 		err = json.Unmarshal([]byte(line), &raw)
 		if err != nil {
+			slog.Debug("skip malformed container entry", "line", line, "error", err)
 			continue
 		}
 		// Docker Labels field is "k1=v1,k2=v2" in --format json.
@@ -417,7 +421,10 @@ func (d *Docker) Prune(ctx context.Context, projectDir string) error {
 		"clampdown-" + d.Name() + "-" + hash + "-cache",
 		"clampdown-" + d.Name() + "-" + hash + "-tmp",
 	}
-	_ = d.command(ctx, append([]string{"volume", "rm", "--force"}, vols...)...).Run()
+	err := d.command(ctx, append([]string{"volume", "rm", "--force"}, vols...)...).Run()
+	if err != nil {
+		slog.Debug("volume prune failed", "volumes", vols, "error", err)
+	}
 
 	// Remaining host dirs: <rt>-home, <rt>-state.
 	dirs, err := filepath.Glob(filepath.Join(projectDir, d.Name()+"-*"))

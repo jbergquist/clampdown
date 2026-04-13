@@ -4,6 +4,7 @@ package mounts
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -128,7 +129,12 @@ func Build(
 		// GlobalPath entries: source is under hostHome but the container sees
 		// the directory mounted at containerHome, so remap Dest accordingly.
 		if p.GlobalPath {
-			rel, _ := filepath.Rel(hostHome, m.Dest)
+			var rel string
+			rel, err = filepath.Rel(hostHome, m.Dest)
+			if err != nil {
+				slog.Warn("cannot compute relative path for global mount", "from", hostHome, "to", m.Dest, "error", err)
+				continue
+			}
 			m.Dest = filepath.Join(containerHome, rel)
 		}
 		mounts = append(mounts, *m)

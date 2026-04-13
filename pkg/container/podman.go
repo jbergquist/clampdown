@@ -355,7 +355,10 @@ func (p *Podman) Prune(ctx context.Context, projectDir string) error {
 		"clampdown-" + p.Name() + "-" + hash + "-cache",
 		"clampdown-" + p.Name() + "-" + hash + "-tmp",
 	}
-	_ = p.command(ctx, append([]string{"volume", "rm", "--force"}, vols...)...).Run()
+	err := p.command(ctx, append([]string{"volume", "rm", "--force"}, vols...)...).Run()
+	if err != nil {
+		slog.Debug("volume prune failed", "volumes", vols, "error", err)
+	}
 
 	// Remaining host dirs: <rt>-home, <rt>-state.
 	dirs, err := filepath.Glob(filepath.Join(projectDir, p.Name()+"-*"))
@@ -437,7 +440,11 @@ func (p *Podman) IsNative(ctx context.Context) (bool, error) {
 			Kernel string `json:"kernel"`
 		} `json:"host"`
 	}
-	_ = json.Unmarshal(out, &info)
+	err = json.Unmarshal(out, &info)
+	if err != nil {
+		slog.Warn("parse podman info", "error", err)
+		return false, errors.New("cannot parse kernel info")
+	}
 
 	return info.Host.Kernel == host, nil
 }

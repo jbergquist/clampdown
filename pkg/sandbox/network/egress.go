@@ -35,10 +35,14 @@ func ResolveAllowlist(domains []string) []string {
 			out = append(out, entry)
 			continue
 		}
-		// CIDR — validate and reject overly broad ranges.
+		// CIDR — validate and reject overly broad or non-standard ranges.
 		_, cidr, cidrErr := net.ParseCIDR(entry)
 		if cidrErr == nil {
-			ones, _ := cidr.Mask.Size()
+			ones, bits := cidr.Mask.Size()
+			if bits == 0 {
+				slog.Warn("non-standard CIDR mask in allowlist, skipping", "cidr", entry)
+				continue
+			}
 			if ones < 4 {
 				slog.Warn("overly broad CIDR in allowlist, skipping", "cidr", entry)
 				continue

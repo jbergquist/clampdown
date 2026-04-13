@@ -5,6 +5,7 @@ package sandbox
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -211,7 +212,11 @@ func AgentLandlockPolicy(
 		}
 	}
 
-	data, _ := json.Marshal(p)
+	data, err := json.Marshal(p)
+	if err != nil {
+		slog.Warn("marshal agent landlock policy", "error", err)
+		return "{}"
+	}
 	return string(data)
 }
 
@@ -392,7 +397,10 @@ func ensureClaudeOnboarding(path string) {
 
 	data, err := os.ReadFile(path)
 	if err == nil {
-		_ = json.Unmarshal(data, &state)
+		err = json.Unmarshal(data, &state)
+		if err != nil {
+			slog.Warn("parse claude config", "path", path, "error", err)
+		}
 	}
 	if state == nil {
 		state = make(map[string]any)
@@ -403,8 +411,15 @@ func ensureClaudeOnboarding(path string) {
 	}
 
 	state["hasCompletedOnboarding"] = true
-	out, _ := json.Marshal(state)
-	_ = os.WriteFile(path, append(out, '\n'), 0o644)
+	out, err := json.Marshal(state)
+	if err != nil {
+		slog.Warn("marshal claude config", "error", err)
+		return
+	}
+	err = os.WriteFile(path, append(out, '\n'), 0o644)
+	if err != nil {
+		slog.Warn("write claude config", "path", path, "error", err)
+	}
 }
 
 // resolveKey looks up an API key by name, checking the host environment
@@ -476,7 +491,11 @@ func ProxyConfig(
 		ConnectTCP: []uint16{443, 53},
 		BindTCP:    []uint16{route.Port},
 	}
-	data, _ := json.Marshal(proxyPolicy)
+	data, err := json.Marshal(proxyPolicy)
+	if err != nil {
+		slog.Warn("marshal proxy landlock policy", "error", err)
+	}
+
 	env["SANDBOX_POLICY"] = string(data)
 
 	return container.ProxyContainerConfig{
