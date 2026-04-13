@@ -7,19 +7,27 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"time"
 )
 
-// ResolveAllowlist resolves domains to IPs using the host's DNS resolver.
+// Public DNS servers to query for diverse round-robin results.
+// CDNs like GitHub/Cloudflare return different IPs to different resolvers.
+var dnsServers = []string{
+	"",                  // system resolver (empty = default)
+	"1.1.1.1:53",        // Cloudflare
+	"8.8.8.8:53",        // Google
+	"9.9.9.9:53",        // Quad9
+	"208.67.222.222:53", // OpenDNS
+}
+
+// ResolveAllowlist resolves domains to IPs using multiple DNS resolvers.
 // IPs and CIDRs pass through unchanged. Used at startup to pre-resolve
 // the agent's static allowlist before passing to the sidecar as env var.
+//
+// Queries each domain against multiple public DNS servers to capture
+// geographically diverse round-robin IPs from CDNs.
 func ResolveAllowlist(domains []string) []string {
 	var out []string
-
-	// Pure-Go resolver bypasses system resolver caching (nscd,
-	// systemd-resolved). Each LookupHost call makes a fresh DNS query,
-	// which is essential for catching DNS round-robin rotation (e.g.
-	// ghcr.io alternates between two IPs per query).
-	resolver := &net.Resolver{PreferGo: true}
 
 	for _, entry := range domains {
 		// Already an IP — pass through.
@@ -38,23 +46,41 @@ func ResolveAllowlist(domains []string) []string {
 			out = append(out, entry)
 			continue
 		}
-		// Domain — query multiple times to collect all round-robin IPs.
+		// Domain — query multiple DNS servers, multiple times each.
 		seen := make(map[string]bool)
-		for range 20 {
-			addrs, err := resolver.LookupHost(context.Background(), entry)
-			if err != nil {
-				continue
+		for _, server := range dnsServers {
+			resolver := &net.Resolver{PreferGo: true}
+			if server != "" {
+				resolver = &net.Resolver{
+					PreferGo: true,
+					Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+						d := net.Dialer{Timeout: 2 * time.Second}
+						return d.DialContext(ctx, "udp", server)
+					},
+				}
 			}
-			for _, a := range addrs {
-				if net.ParseIP(a) != nil && !seen[a] {
-					seen[a] = true
-					out = append(out, a)
+			// Query each server multiple times to catch rotation.
+			for range 20 {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				addrs, err := resolver.LookupHost(ctx, entry)
+				cancel()
+				if err != nil {
+					continue
+				}
+				for _, a := range addrs {
+					if net.ParseIP(a) != nil && !seen[a] {
+						seen[a] = true
+						out = append(out, a)
+					}
 				}
 			}
 		}
 		if len(seen) == 0 {
 			slog.Warn("cannot resolve host", "host", entry)
+			continue
 		}
+
+		slog.Debug("resolved domain", "domain", entry, "ips", len(seen))
 	}
 
 	return out

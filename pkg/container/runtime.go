@@ -46,7 +46,7 @@ type Info struct {
 }
 
 // RegistryDomains lists domains needed by the sidecar for container image pulls.
-// Resolved to IPs at startup via DNS.
+// Resolved to IPs at startup via DNS using multiple resolvers.
 //
 // Docker Hub: https://docs.docker.com/desktop/setup/allow-list/
 // Quay.io:    https://access.redhat.com/articles/7084334
