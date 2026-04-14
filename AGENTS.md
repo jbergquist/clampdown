@@ -389,3 +389,41 @@ Manual verification:
 
 - `DIAGRAM.md` — Full security model: container topology, defense layers, seccomp
   architecture, network policy, Landlock policy, capability model, OCI hook pipeline.
+
+## Source Files
+
+@container-images/proxy/proxy.go
+@container-images/sidecar/entrypoint/bootstrap.go
+@container-images/sidecar/entrypoint/entrypoint.go
+@container-images/sidecar/entrypoint/execallow.go
+@container-images/sidecar/entrypoint/filter.go
+@container-images/sidecar/entrypoint/handlers.go
+@container-images/sidecar/entrypoint/protect.go
+@container-images/sidecar/entrypoint/supervisor.go
+@container-images/sidecar/hooks/createRuntime/security-policy.go
+@container-images/sidecar/hooks/precreate/seal-inject.go
+@container-images/sidecar/log/log.go
+@container-images/sidecar/seal/seal.go
+@pkg/agent/agent.go
+@pkg/agent/claude.go
+@pkg/agent/opencode.go
+@pkg/agent/skill.go
+@pkg/cli/app.go
+@pkg/cli/config.go
+@pkg/container/detect.go
+@pkg/container/docker.go
+@pkg/container/podman.go
+@pkg/container/runtime.go
+@pkg/sandbox/config.go
+@pkg/sandbox/credentials.go
+@pkg/sandbox/gitignore.go
+@pkg/sandbox/log.go
+@pkg/sandbox/mounts/mounts.go
+@pkg/sandbox/network/egress.go
+@pkg/sandbox/network/firewall.go
+@pkg/sandbox/paths.go
+@pkg/sandbox/rcfile.go
+@pkg/sandbox/sandbox.go
+@pkg/sandbox/seccomp/seccomp.go
+@pkg/sandbox/session/session.go
+@pkg/sandbox/tripwire/tripwire.go
