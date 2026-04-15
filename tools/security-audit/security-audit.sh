@@ -2,50 +2,57 @@
 set -euo pipefail
 
 # =============================================================================
-# security-audit-api.sh - Security audit using Claude CLI via clampdown
+# security-audit-unified.sh - Security audit for single files or entire projects
 # =============================================================================
 
 usage()
 {
 	cat << 'EOF'
-Usage: security-audit.sh [OPTIONS]
+Usage: security-audit-unified.sh [OPTIONS]
 
-Runs one security audit cycle using Claude CLI.
+Security audit using Claude CLI via clampdown.
+
+Modes (pick one):
+    --file FILE       Audit a single file in depth
+    --project [DIR]   Audit entire project (default: current directory)
 
 Options:
-    --file FILE   Audit a specific file (skip selection phase)
-    --dry-run     Print prompts without calling Claude
-    -h, --help    Show this help text
+    --dry-run         Print prompts without calling Claude
+    -h, --help        Show this help
 
 Environment:
-    PROJECT_DIR          Codebase root (default: current directory)
-    REPORT_ROOT          Report root path (default: <project>/reports)
-    MODEL                Model to use (default: claude-opus-4-5)
-    EFFORT               Reasoning effort (default: max)
-    FILE_PATTERNS        File extensions to scan (default: *.c *.h *.py *.js *.ts *.go *.rs *.java)
+    MODEL             Model to use (default: claude-opus-4-6[1m])
+    EFFORT            Reasoning effort (default: max)
+    REPORT_ROOT       Report directory (default: <project>/reports)
 EOF
 }
 
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
-REPORT_ROOT="${REPORT_ROOT:-$PROJECT_DIR/reports}"
-RUNS_DIR="${RUNS_DIR:-$PROJECT_DIR/runs}"
-MODEL="${MODEL:-claude-opus-4-5}"
+MODEL="${MODEL:-"claude-opus-4-6[1m]"}"
 EFFORT="${EFFORT:-max}"
-FILE_PATTERNS="${FILE_PATTERNS:-*.c *.h *.py *.js *.ts *.go *.rs *.java}"
-
-VALIDATED_DIR="$REPORT_ROOT/validated"
-PROGRESS_FILE="$REPORT_ROOT/.audit-progress"
 DRY_RUN=false
+MODE=""
 TARGET_FILE=""
+PROJECT_DIR=""
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--file)
+			MODE="file"
 			TARGET_FILE="$2"
 			shift 2
+			;;
+		--project)
+			MODE="project"
+			if [[ $# -gt 1 && ! $2 =~ ^- ]]; then
+				PROJECT_DIR="$2"
+				shift 2
+			else
+				PROJECT_DIR="$(pwd)"
+				shift
+			fi
 			;;
 		--dry-run)
 			DRY_RUN=true
@@ -56,11 +63,39 @@ while [[ $# -gt 0 ]]; do
 			exit 0
 			;;
 		*)
-			echo "Unknown: $1"
+			echo "Unknown: $1" >&2
+			usage
 			exit 1
 			;;
 	esac
 done
+
+if [[ -z $MODE ]]; then
+	echo "Error: Must specify --file or --project" >&2
+	usage
+	exit 1
+fi
+
+# Resolve paths
+if [[ $MODE == "file" ]]; then
+	[[ ! -f $TARGET_FILE ]] && {
+		echo   "File not found: $TARGET_FILE" >&2
+		exit                                            1
+	}
+	TARGET_FILE="$(realpath "$TARGET_FILE")"
+	PROJECT_DIR="$(dirname "$TARGET_FILE")"
+	# Walk up to find project root (has .git or go.mod or package.json)
+	while [[ $PROJECT_DIR != "/" ]]; do
+		[[ -d "$PROJECT_DIR/.git" || -f "$PROJECT_DIR/go.mod" || -f "$PROJECT_DIR/package.json" ]] && break
+		PROJECT_DIR="$(dirname "$PROJECT_DIR")"
+	done
+	[[ $PROJECT_DIR == "/" ]] && PROJECT_DIR="$(dirname "$TARGET_FILE")"
+fi
+
+PROJECT_DIR="$(realpath "$PROJECT_DIR")"
+REPORT_ROOT="${REPORT_ROOT:-$PROJECT_DIR/reports}"
+RUNS_DIR="$REPORT_ROOT/runs"
+VALIDATED_DIR="$REPORT_ROOT/validated"
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -75,156 +110,75 @@ ensure_dirs()
 	mkdir -p "$VALIDATED_DIR" "$RUNS_DIR"
 }
 
-get_file_list()
-{
-	# Skip hidden directories, match common source files
-	find "$PROJECT_DIR" \
-		-type d -name '.*' -prune -o \
-		-type f \( \
-			-name '*.c' -o -name '*.h' -o -name '*.py' -o -name '*.js' -o \
-			-name '*.ts' -o -name '*.go' -o -name '*.rs' -o -name '*.java' \
-		\) -print 2>/dev/null | \
-		sed "s|^$PROJECT_DIR/||" | head -200 | sort
-}
-
 get_validated_summary()
 {
-	if [[ -d $VALIDATED_DIR ]] && compgen -G "$VALIDATED_DIR/*.md" > /dev/null; then
+	if [[ -d $VALIDATED_DIR ]] && compgen -G "$VALIDATED_DIR/*.md" > /dev/null 2>&1; then
 		local count=0
 		for f in "$VALIDATED_DIR"/*.md; do
 			count=$((count + 1))
 			echo "=== EXISTING FINDING #$count: $(basename "$f") ==="
-			# Get title, affected code, and summary for duplicate detection
 			head -60 "$f"
-			echo ""
-			echo "---"
-			echo ""
+			echo -e "\n---\n"
 		done
 		echo "(Total existing validated findings: $count)"
 	else
-		echo "(No validated findings yet - this is the first run)"
+		echo "(No validated findings yet)"
 	fi
 }
 
-# -----------------------------------------------------------------------------
-# Claude CLI Call
-# -----------------------------------------------------------------------------
 call_claude()
 {
-	local system_prompt="$1"
-	local user_prompt="$2"
-	local output_file="$3"
+	local prompt="$1"
+	local output_file="$2"
 
-	# Combine system + user into a single prompt for CLI
-	local full_prompt="$system_prompt
-
----
-
-$user_prompt"
+	local prompt_file="${output_file}.prompt.txt"
+	echo "$prompt" > "$prompt_file"
 
 	if [[ $DRY_RUN == "true" ]]; then
-		log "[DRY-RUN] Would call Claude with ${#full_prompt} char prompt"
-		echo "$full_prompt" > "$output_file.prompt.txt"
-		echo '{"dry_run": true}' > "$output_file"
+		log "[DRY-RUN] Would call Claude with ${#prompt} char prompt"
+		echo "(dry run)" > "$output_file"
 		return 0
 	fi
 
-	# Call Claude via clampdown with prompt as argument
-	clampdown claude -- \
+	"$(dirname "$0")"/../../clampdown claude \
+		--sidecar-image clampdown-sidecar:latest \
+		--proxy-image clampdown-proxy:latest \
+		--agent-image clampdown-claude:latest \
+		-- \
 		--dangerously-skip-permissions \
 		--model "$MODEL" \
 		--effort "$EFFORT" \
-		--print \
-		--output-format text \
-		-p "$full_prompt" > "$output_file" 2>&1 || {
-		log "Claude returned non-zero, check $output_file"
-		return 1
-	}
+		--print --output-format text --verbose \
+		-p "$(cat "$prompt_file")" | tee "$output_file"
 }
 
 # -----------------------------------------------------------------------------
-# Selection Phase
+# Gather file list for @ imports
 # -----------------------------------------------------------------------------
-run_selection()
+gather_file_imports()
 {
-	local run_dir="$1"
-	local file_list="$2"
-	local validated_summary="$3"
+	local mode="$1"
 
-	local system="You are a security researcher selecting the next audit target. Output valid JSON only."
-
-	local user
-	user=$(
-		cat << EOF
-## Codebase files (sample)
-$file_list
-
-## Already validated findings
-$validated_summary
-
-## Task
-Select ONE file and ONE specific vulnerability target to investigate.
-
-Vulnerability classes to consider:
-
-**Classic Web/App:**
-- Injection (SQL, Command, LDAP, XPath)
-- Authentication/Session issues
-- Access Control flaws
-- XSS, CSRF, SSRF
-- Insecure Deserialization
-- Path Traversal
-
-**Memory Safety:**
-- Buffer Overflow, Use-After-Free, Double-Free
-- Integer Overflow/Underflow, Type Confusion
-- Uninitialized Memory, Out-of-Bounds R/W
-- Race Conditions (TOCTOU)
-
-**Sandbox/Container Escape:**
-- Container breakout (cgroups, namespaces, capabilities)
-- seccomp/AppArmor/SELinux bypass
-- /proc or /sys abuse
-- Device file access (/dev/mem, /dev/kmem, /dev/sda)
-- Mount namespace escapes
-- Privileged container misuse
-- Volume mount path traversal to host
-- Unix socket exposure (docker.sock, podman.sock)
-- runc/crun/containerd vulnerabilities
-
-**Kernel/Privilege Escalation:**
-- Syscall vulnerabilities
-- ioctl handler bugs
-- Netfilter/eBPF exploits
-- Capability misuse (CAP_SYS_ADMIN, CAP_NET_RAW, etc.)
-- Kernel module loading
-- SUID/SGID binary abuse
-- Dirty Pipe/COW style bugs
-
-**Lateral Movement:**
-- Credential harvesting from env/files/memory
-- SSH key theft or agent hijacking
-- Service account token abuse (Kubernetes)
-- Network pivoting via exposed services
-- Cloud metadata service (169.254.169.254) access
-- Internal API abuse
-
-**Cryptographic:**
-- Weak RNG, hardcoded secrets
-- Key material exposure
-- Downgrade attacks
-
-Output JSON:
-{
-  "selected_file": "path/to/file",
-  "investigation_target": "specific area",
-  "rationale": "why this is promising",
-  "differs_from_existing": "how it's not a duplicate"
-}
-EOF
-	)
-
-	call_claude "$system" "$user" "$run_dir/selection.json"
+	if [[ $mode == "file" ]]; then
+		echo "@$TARGET_FILE"
+	else
+		# Find all source files, output as @path for Claude import
+		find "$PROJECT_DIR" \
+			-type d -name '.*' -prune -o \
+			-type d -name 'vendor' -prune -o \
+			-type d -name 'node_modules' -prune -o \
+			-type d -name '__pycache__' -prune -o \
+			-type f \( \
+			-name '*.c' -o -name '*.h' -o \
+			-name '*.go' -o \
+			-name '*.py' -o \
+			-name '*.js' -o -name '*.ts' -o \
+			-name '*.rs' -o \
+			-name '*.java' -o \
+			-name '*.rb' -o \
+			-name '*.sh' \
+			\) -print 2> /dev/null | sort | sed 's/^/@/'
+	fi
 }
 
 # -----------------------------------------------------------------------------
@@ -233,95 +187,95 @@ EOF
 run_analysis()
 {
 	local run_dir="$1"
-	local validated_summary="$2"
+	local file_imports="$2"
+	local target_desc="$3"
 
-	local selected_file target rationale
-	selected_file=$(jq -r '.selected_file // empty' "$run_dir/selection.json" 2> /dev/null || echo "")
-	target=$(jq -r '.investigation_target // empty' "$run_dir/selection.json" 2> /dev/null || echo "")
-	rationale=$(jq -r '.rationale // empty' "$run_dir/selection.json" 2> /dev/null || echo "")
-
-	if [[ -z $selected_file ]]; then
-		log "ERROR: No file selected"
-		return 1
-	fi
-
-	log "Analyzing: $selected_file -> $target"
-
-	local file_content=""
-	[[ -f "$PROJECT_DIR/$selected_file" ]] && file_content=$(head -500 "$PROJECT_DIR/$selected_file")
-
-	local system="You are a security auditor writing CVE-style vulnerability reports. Be thorough and precise."
-
-	local user
-	user=$(
+	local prompt
+	prompt=$(
 		cat << EOF
-## Target
-File: $selected_file
-Focus: $target
-Selection rationale: $rationale
+You are performing a security audit of: $target_desc
 
-## Code
-\`\`\`
-$file_content
-\`\`\`
+## Code to Audit
+Read and analyze these files:
+$file_imports
 
-## Existing findings (avoid duplicates)
-$validated_summary
+## Vulnerability Classes to Check
 
-## Task
-Analyze for security vulnerabilities. Pay special attention to:
-- Sandbox/container escape vectors (namespace, cgroup, capability, mount abuse)
-- Privilege escalation paths (SUID, capabilities, kernel interfaces)
-- Lateral movement opportunities (credential exposure, network pivoting)
-- Host breakout from containerized contexts
+**Injection & Input:**
+- Command injection, SQL injection, path traversal
+- XSS, SSRF, XXE, template injection
 
-If found, write a report:
+**Authentication & Access:**
+- Auth bypass, broken access control
+- Hardcoded credentials, weak session management
+
+**Sandbox/Container Escape:**
+- Namespace/cgroup/capability abuse
+- seccomp/AppArmor/SELinux bypass
+- /proc, /sys, device file abuse
+- Mount escapes, volume path traversal
+- Unix socket exposure (docker.sock, podman.sock)
+- Runtime vulnerabilities (runc, crun)
+
+**Privilege Escalation:**
+- SUID/capability misuse
+- Kernel interface bugs
+- Privilege boundary violations
+
+**Memory Safety:**
+- Buffer overflow, use-after-free, double-free
+- Integer overflow, type confusion
+- Race conditions (TOCTOU)
+
+**Lateral Movement:**
+- Credential/token/key exposure
+- Cloud metadata access (169.254.169.254)
+- Network pivoting
+
+**Crypto:**
+- Weak RNG, broken crypto
+- Key material exposure
+
+## Output Format
+
+For EACH vulnerability found:
+
+---
 
 # [Title]
 
-## Summary
-Brief description.
-
 ## Severity
-Critical/High/Medium/Low + CVSS if possible
+Critical/High/Medium/Low (with CVSS if applicable)
 
 ## CWE
 CWE-XXX: Name
 
+## Location
+File path and line numbers
+
+## Description
+What the vulnerability is.
+
 ## Attack Surface
-How an attacker reaches this code (container, network, local user, etc.)
-
-## Affected Code
-File and lines
-
-## Technical Details
-How it works. For escape/escalation bugs, describe:
-- What boundary is crossed (container->host, user->root, sandbox->system)
-- What primitives are gained (arbitrary read/write, code exec, capability)
+How an attacker reaches this code.
 
 ## Proof of Concept
-Exploitation steps or code. Include:
-- Prerequisites (container config, kernel version, etc.)
-- Concrete commands or code
-- Expected vs exploited behavior
+Concrete exploitation steps or code.
 
 ## Impact
-What attacker achieves. Specify:
-- Pre-exploitation context (unprivileged container, sandboxed process, etc.)
-- Post-exploitation context (host root, kernel code exec, etc.)
+What an attacker gains (be specific about privilege boundaries crossed).
 
 ## Remediation
-How to fix. Include:
-- Code changes
-- Configuration hardening (seccomp, AppArmor, capabilities to drop)
-- Architectural mitigations
+How to fix it.
 
 ---
-If no vulnerability found, explain what was checked and why no issue exists.
+
+If NO vulnerabilities found, explain what you checked and why it appears secure.
+Only report REAL, exploitable vulnerabilities - not theoretical concerns or hardening suggestions.
 EOF
 	)
 
-	call_claude "$system" "$user" "$run_dir/report.md"
+	call_claude "$prompt" "$run_dir/report.md"
 }
 
 # -----------------------------------------------------------------------------
@@ -335,97 +289,101 @@ run_validation()
 	local report
 	report=$(cat "$run_dir/report.md")
 
-	local system="You are a strict security validator. Your job is to REJECT false positives and duplicates. Be skeptical. Only output valid JSON."
+	local json_relpath="${run_dir#$PWD/}/validation.json"
 
-	local user
-	user=$(
+	local prompt
+	prompt=$(
 		cat << EOF
-## Candidate Report to Validate
+You are a strict security validator. Your job is to REJECT false positives and duplicates.
+
+## Report to Validate
 $report
 
-## ALL Existing Validated Findings (you MUST check for duplicates against these)
+## Existing Validated Findings (check for duplicates)
 $validated_summary
 
----
+## Validation Checklist
 
-## YOUR VALIDATION TASKS (complete ALL of these)
+### 1. Duplicate Check
+Compare against ALL existing findings. Reject if:
+- Same file AND same vulnerable code path
+- Same vulnerability class in same component
+- Same root cause (even with different wording)
 
-### Task 1: Duplicate Check (CRITICAL - do this FIRST)
-Compare this candidate against EVERY existing validated finding listed above.
-A finding is a DUPLICATE if ANY of these match:
-- Same file AND same vulnerable function/code path
-- Same vulnerability class in the same component (e.g., both are buffer overflows in the parser)
-- Same root cause, even if the description uses different words
-- Overlapping exploitation path that would be fixed by the same patch
-
-If ANY existing finding covers this issue, even partially → REJECT as duplicate.
-
-### Task 2: Verify the Bug Actually Exists
+### 2. Bug Exists Check
 The report MUST have:
-- [ ] Exact code location (file path + line numbers)
-- [ ] The actual vulnerable code shown
-- [ ] Concrete trigger (specific input/command, not "an attacker could...")
-- [ ] Real vulnerability, not just "risky code pattern"
+- Exact file path and line numbers
+- Actual vulnerable code shown
+- Concrete trigger (not "an attacker could...")
 
-REJECT if you see these red flags:
-- Vague language ("may lead to", "could potentially", "if an attacker...")
+REJECT if you see:
+- Vague language ("may lead to", "could potentially")
 - No specific line numbers
 - Speculation without demonstrated exploitation
-- "Recommendation" or "hardening" disguised as a vulnerability
-- The claimed bug doesn't actually exist in the shown code
-- Defense-in-depth suggestion, not actual vulnerability
+- Hardening suggestion disguised as vulnerability
 
-### Task 3: Verify It's Actually Exploitable
-- [ ] The vulnerable code path is reachable (not dead code, not behind admin auth)
-- [ ] The prerequisites are realistic (default config, common deployment)
-- [ ] Container escapes: must work WITHOUT --privileged (unless that's the bug)
-- [ ] Kernel bugs: must affect kernel >= 5.x or current LTS
-- [ ] The PoC steps would actually work if executed
+### 3. Exploitability Check
+- Code path is reachable (not dead code)
+- Prerequisites are realistic (default config)
+- PoC would actually work
 
-### Task 4: Honest Severity Check
-- Is this really Critical/High severity, or is the report exaggerating?
-- Would this get a CVE, or is it a hardening suggestion?
-- What's the realistic impact (not the theoretical worst-case)?
+### 4. Severity Check
+- Is the severity accurate or exaggerated?
+- Would this get a CVE or is it just a suggestion?
 
----
+## Output
 
-## Output Format (JSON only, no markdown)
+Write a JSON file to: $json_relpath
+
+Use your Write tool to write the file. The file must contain a JSON array with one
+element per finding in the report. If the report contains no findings, write [].
+
+Each element:
 {
+  "finding": 1,
+  "title": "Short title of the finding",
   "decision": "ACCEPT" or "REJECT",
-
   "duplicate_check": {
-    "is_duplicate": true or false,
-    "matches_existing": "filename of matching finding, or null",
-    "reasoning": "explain the comparison"
+    "is_duplicate": true/false,
+    "matches_existing": "filename or null",
+    "reasoning": "explanation"
   },
-
-  "bug_exists_check": {
-    "has_exact_location": true or false,
-    "has_concrete_trigger": true or false,
-    "is_real_vulnerability": true or false,
-    "reasoning": "explain why this is/isn't a real bug"
+  "bug_exists": {
+    "has_location": true/false,
+    "has_concrete_trigger": true/false,
+    "is_real_vulnerability": true/false,
+    "reasoning": "explanation"
   },
-
-  "exploitability_check": {
-    "code_is_reachable": true or false,
-    "prereqs_are_realistic": true or false,
-    "poc_would_work": true or false,
-    "reasoning": "explain exploitability"
+  "exploitability": {
+    "reachable": true/false,
+    "realistic_prereqs": true/false,
+    "poc_works": true/false,
+    "reasoning": "explanation"
   },
-
   "severity": "Critical/High/Medium/Low/Invalid",
   "confidence": "high/medium/low",
-  "summary": "one sentence final verdict"
+  "summary": "one sentence verdict"
 }
 
-IMPORTANT: Default to REJECT. Only ACCEPT if ALL THREE checks pass:
-1. NOT a duplicate
-2. Bug demonstrably EXISTS
-3. Bug is realistically EXPLOITABLE
+Default to REJECT. Only ACCEPT if ALL checks pass.
 EOF
 	)
 
-	call_claude "$system" "$user" "$run_dir/validation.json"
+	call_claude "$prompt" "$run_dir/validation.log"
+
+	if [[ $DRY_RUN == "true" ]]; then
+		return 0
+	fi
+
+	if [[ ! -f "$run_dir/validation.json" ]]; then
+		log "ERROR: Model did not write $json_relpath"
+		return 1
+	fi
+
+	if ! jq empty "$run_dir/validation.json" 2> /dev/null; then
+		log "ERROR: $json_relpath is not valid JSON"
+		return 1
+	fi
 }
 
 # -----------------------------------------------------------------------------
@@ -441,62 +399,81 @@ main()
 	mkdir -p "$run_dir"
 
 	log "Run: $run_id"
+	log "Mode: $MODE"
 	log "Model: $MODEL (effort: $EFFORT)"
 	log "Project: $PROJECT_DIR"
+	log "Reports: $REPORT_ROOT"
 
 	local validated_summary
 	validated_summary=$(get_validated_summary)
 
-	# If a specific file is targeted, skip selection phase
-	if [[ -n $TARGET_FILE ]]; then
-		log "Target file: $TARGET_FILE (skipping selection)"
+	local file_imports target_desc file_count
 
-		# Create a synthetic selection result
-		cat > "$run_dir/selection.json" << EOF
-{
-  "selected_file": "$TARGET_FILE",
-  "investigation_target": "comprehensive security audit of this file",
-  "rationale": "systematic file-by-file audit",
-  "differs_from_existing": "covering all files systematically"
-}
-EOF
+	if [[ $MODE == "file" ]]; then
+		local rel_path="${TARGET_FILE#$PROJECT_DIR/}"
+		log "Target: $rel_path"
+		target_desc="Single file: $rel_path"
+		file_imports=$(gather_file_imports "file")
+		file_count=1
 	else
-		local file_list
-		file_list=$(get_file_list)
-		log "Files: $(echo "$file_list" | wc -l)"
-
-		log "Step 1: Selection"
-		run_selection "$run_dir" "$file_list" "$validated_summary"
+		log "Target: entire project"
+		target_desc="Entire project at $PROJECT_DIR"
+		file_imports=$(gather_file_imports "project")
+		file_count=$(echo "$file_imports" | wc -l)
+		log "Found $file_count source files"
 	fi
 
-	log "Step 2: Analysis"
-	run_analysis "$run_dir" "$validated_summary"
+	# Save file list for reference
+	echo "$file_imports" > "$run_dir/files.txt"
 
-	log "Step 3: Validation"
+	# Step 1: Analysis
+	log "Step 1: Analysis"
+	run_analysis "$run_dir" "$file_imports" "$target_desc"
+	log "Analysis complete"
+
+	# Step 2: Validation
+	log "Step 2: Validation"
 	run_validation "$run_dir" "$validated_summary"
 
-	# Check result
-	local decision
-	decision=$(jq -r '.decision // "REJECT"' "$run_dir/validation.json" 2> /dev/null || echo "REJECT")
+	# Process per-finding results
+	local total accepted=0 rejected=0
+	total=$(jq 'length' "$run_dir/validation.json")
 
-	if [[ $decision == "ACCEPT" ]]; then
-		local ts severity
-		ts=$(date -u +%Y%m%dT%H%M%SZ)
-		severity=$(jq -r '.severity // "Unknown"' "$run_dir/validation.json" 2> /dev/null || echo "Unknown")
-		cp "$run_dir/report.md" "$VALIDATED_DIR/${ts}.md"
-		log "ACCEPTED [$severity] -> $VALIDATED_DIR/${ts}.md"
-	else
-		local summary is_dup
-		summary=$(jq -r '.summary // "no reason"' "$run_dir/validation.json" 2> /dev/null || echo "")
-		is_dup=$(jq -r '.duplicate_check.is_duplicate // false' "$run_dir/validation.json" 2> /dev/null || echo "false")
-		if [[ $is_dup == "true" ]]; then
-			local matches
-			matches=$(jq -r '.duplicate_check.matches_existing // "unknown"' "$run_dir/validation.json" 2> /dev/null || echo "")
-			log "REJECTED [DUPLICATE of $matches]: $summary"
-		else
-			log "REJECTED: $summary"
-		fi
+	if [[ $total -eq 0 ]]; then
+		log "No findings in report"
 	fi
+
+	local i
+	for ((i = 0; i < total; i++)); do
+		local decision title severity summary
+		decision=$(jq -r ".[$i].decision // \"REJECT\"" "$run_dir/validation.json")
+		title=$(jq -r ".[$i].title // \"finding-$((i + 1))\"" "$run_dir/validation.json")
+		severity=$(jq -r ".[$i].severity // \"Unknown\"" "$run_dir/validation.json")
+		summary=$(jq -r ".[$i].summary // \"no reason\"" "$run_dir/validation.json")
+
+		if [[ $decision == "ACCEPT" ]]; then
+			accepted=$((accepted + 1))
+			local slug
+			slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//')
+			local ts
+			ts=$(date -u +%Y%m%dT%H%M%SZ)
+			cp "$run_dir/report.md" "$VALIDATED_DIR/${ts}-${slug}.md"
+			log "ACCEPTED [$severity] #$((i + 1)): $title -> ${ts}-${slug}.md"
+		else
+			rejected=$((rejected + 1))
+			local is_dup
+			is_dup=$(jq -r ".[$i].duplicate_check.is_duplicate // false" "$run_dir/validation.json")
+			if [[ $is_dup == "true" ]]; then
+				local matches
+				matches=$(jq -r ".[$i].duplicate_check.matches_existing // \"unknown\"" "$run_dir/validation.json")
+				log "REJECTED [DUPLICATE of $matches] #$((i + 1)): $title - $summary"
+			else
+				log "REJECTED #$((i + 1)): $title - $summary"
+			fi
+		fi
+	done
+
+	log "$accepted accepted, $rejected rejected out of $total findings"
 
 	log "Done. Artifacts in $run_dir"
 }

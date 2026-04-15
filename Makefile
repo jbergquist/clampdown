@@ -225,3 +225,19 @@ clean:
 	$(CTR) rmi $(CLAUDE_IMAGE) 2>/dev/null || true
 	$(CTR) rmi $(OPENCODE_IMAGE) 2>/dev/null || true
 	$(CTR) rmi $(PROXY_IMAGE) 2>/dev/null || true
+
+# --- Security Audit ---
+AUDIT_AGENT ?= claude
+
+# Sandbox escape audit - agent attempts to break out of confinement
+audit-escape: all
+	./tools/security-audit/security-audit-sandbox.sh $(AUDIT_AGENT)
+
+# Full project audit: holistic analysis, then file-by-file sweep
+audit-project:
+	@echo "=== Holistic project audit ==="
+	@./tools/security-audit/security-audit.sh --project .
+
+audit-project-files:
+	@echo "=== File-by-file sweep ==="
+	@find pkg/ container-images/ -type f -print0 | xargs -0 file --mime-type | grep text | cut -d: -f1 | xargs -I{} ./tools/security-audit/security-audit.sh --file {}
