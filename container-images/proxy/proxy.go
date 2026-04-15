@@ -112,6 +112,12 @@ func main() {
 		if modelStr == "" {
 			modelStr = modelFromPath(req.URL.Path)
 		}
+		modelStr = strings.Map(func(r rune) rune {
+			if r < 0x20 || r == 0x7f {
+				return '_'
+			}
+			return r
+		}, modelStr)
 		fmt.Fprintf(os.Stderr, "clampdown: %s proxy: %s %s %d model=%s req=%d resp=%d %s\n",
 			start.Format(time.RFC3339),
 			req.Method, req.URL.Path, rec.status, modelStr,
