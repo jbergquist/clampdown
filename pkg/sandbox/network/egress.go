@@ -6,7 +6,9 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,13 +31,13 @@ var dnsServers = []string{
 func ResolveAllowlist(domains []string) []string {
 	var out []string
 
+	// Separate passthrough entries (IPs, CIDRs) from domains needing resolution.
+	var toResolve []string
 	for _, entry := range domains {
-		// Already an IP — pass through.
 		if net.ParseIP(entry) != nil {
 			out = append(out, entry)
 			continue
 		}
-		// CIDR — validate and reject overly broad or non-standard ranges.
 		_, cidr, cidrErr := net.ParseCIDR(entry)
 		if cidrErr == nil {
 			ones, bits := cidr.Mask.Size()
@@ -50,9 +52,41 @@ func ResolveAllowlist(domains []string) []string {
 			out = append(out, entry)
 			continue
 		}
-		// Domain — query multiple DNS servers, multiple times each.
-		seen := make(map[string]bool)
-		for _, server := range dnsServers {
+		toResolve = append(toResolve, entry)
+	}
+
+	// Resolve all domains in parallel.
+	resolved := make([][]string, len(toResolve))
+
+	var wg sync.WaitGroup
+	for i, domain := range toResolve {
+		wg.Go(func() {
+			resolved[i] = resolveDomain(domain)
+		})
+	}
+	wg.Wait()
+
+	for i, ips := range resolved {
+		if len(ips) == 0 {
+			slog.Warn("cannot resolve host", "host", toResolve[i])
+			continue
+		}
+		out = append(out, ips...)
+		slog.Debug("resolved domain", "domain", toResolve[i], "ips", len(ips))
+	}
+
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// resolveDomain queries all DNS servers in parallel, each 20 times
+// sequentially to catch round-robin rotation.
+func resolveDomain(domain string) []string {
+	perServer := make([][]string, len(dnsServers))
+
+	var wg sync.WaitGroup
+	for i, server := range dnsServers {
+		wg.Go(func() {
 			resolver := &net.Resolver{PreferGo: true}
 			if server != "" {
 				resolver = &net.Resolver{
@@ -63,31 +97,31 @@ func ResolveAllowlist(domains []string) []string {
 					},
 				}
 			}
-			// Query each server multiple times to catch rotation.
+
+			var ips []string
 			for range 20 {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				addrs, err := resolver.LookupHost(ctx, entry)
+				addrs, err := resolver.LookupHost(ctx, domain)
 				cancel()
 				if err != nil {
 					continue
 				}
 				for _, a := range addrs {
-					if net.ParseIP(a) != nil && !seen[a] {
-						seen[a] = true
-						out = append(out, a)
+					if net.ParseIP(a) != nil {
+						ips = append(ips, a)
 					}
 				}
 			}
-		}
-		if len(seen) == 0 {
-			slog.Warn("cannot resolve host", "host", entry)
-			continue
-		}
-
-		slog.Debug("resolved domain", "domain", entry, "ips", len(seen))
+			perServer[i] = ips
+		})
 	}
+	wg.Wait()
 
-	return out
+	var all []string
+	for _, ips := range perServer {
+		all = append(all, ips...)
+	}
+	return all
 }
 
 // ClassifyIPs splits resolved IPs into IPv4 and IPv6 buckets.
