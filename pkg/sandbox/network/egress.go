@@ -15,11 +15,15 @@ import (
 // Public DNS servers to query for diverse round-robin results.
 // CDNs like GitHub/Cloudflare return different IPs to different resolvers.
 var dnsServers = []string{
-	"",                  // system resolver (empty = default)
-	"1.1.1.1:53",        // Cloudflare
-	"8.8.8.8:53",        // Google
-	"9.9.9.9:53",        // Quad9
-	"208.67.222.222:53", // OpenDNS
+	"",                          // system resolver (empty = default)
+	"1.1.1.1:53",                // Cloudflare (IPv4)
+	"[2606:4700:4700::1111]:53", // Cloudflare (IPv6)
+	"8.8.8.8:53",                // Google (IPv4)
+	"[2001:4860:4860::8888]:53", // Google (IPv6)
+	"9.9.9.9:53",                // Quad9 (IPv4)
+	"[2620:fe::fe]:53",          // Quad9 (IPv6)
+	"208.67.222.222:53",         // OpenDNS (IPv4)
+	"[2620:119:35::35]:53",      // OpenDNS (IPv6)
 }
 
 // ResolveAllowlist resolves domains to IPs using multiple DNS resolvers.
