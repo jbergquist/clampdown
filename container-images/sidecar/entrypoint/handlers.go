@@ -210,14 +210,15 @@ func handleMount(
 		return
 	}
 
-	// Block non-recursive bind mount where the source is the workdir or
-	// an ancestor of it. A non-recursive bind of any path that contains
-	// the workdir doesn't carry the /dev/null sub-mounts, exposing masked files.
+	// Block non-recursive bind mount where the source is the workdir, an
+	// ancestor, or a child of it. A non-recursive bind of any path that
+	// overlaps the workdir doesn't carry /dev/null sub-mounts, exposing
+	// masked files.
 	if workdir != "" && flags&unix.MS_BIND != 0 && flags&unix.MS_REC == 0 && source != "" {
-		if source == workdir || isSubPath(source, workdir) {
+		if source == workdir || isSubPath(source, workdir) || isSubPath(workdir, source) {
 			resp.Error = -int32(unix.EPERM)
 			logf(
-				"BLOCKED mount(MS_BIND) source=%s target=%s pid=%d bin=%s (workdir ancestor bind)",
+				"BLOCKED mount(MS_BIND) source=%s target=%s pid=%d bin=%s (non-recursive workdir bind)",
 				source,
 				target,
 				pid,
@@ -270,10 +271,10 @@ func handleOpenTree(notif *seccompNotif, resp *seccompNotifResp, pid uint32, wor
 		return
 	}
 
-	// Block non-recursive clone of workdir or ancestor (strips /dev/null sub-mounts).
-	if workdir != "" && (path == workdir || isSubPath(path, workdir)) {
+	// Block non-recursive clone of workdir, ancestor, or child (strips sub-mounts).
+	if workdir != "" && (path == workdir || isSubPath(path, workdir) || isSubPath(workdir, path)) {
 		resp.Error = -int32(unix.EPERM)
-		logf("BLOCKED open_tree(CLONE) path=%s pid=%d bin=%s (workdir ancestor clone)", path, pid, exePath(pid))
+		logf("BLOCKED open_tree(CLONE) path=%s pid=%d bin=%s (non-recursive workdir clone)", path, pid, exePath(pid))
 		return
 	}
 
