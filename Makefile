@@ -43,7 +43,7 @@ OPENCODE_SRCS     := container-images/opencode/Containerfile $(HELPERS_SRC) $(NE
 .PHONY: all binaries test test-integration lint \
 	seal sidecar claude opencode proxy launcher install clean \
 	push-sidecar push-claude push-opencode push-proxy push-images \
-	manifest save-images
+	manifest save-images dev undev
 
 all: .sidecar.stamp .claude.stamp .opencode.stamp .proxy.stamp launcher
 
@@ -181,6 +181,36 @@ launcher:
 
 install: launcher
 	install -Dm755 clampdown ~/.local/bin/clampdown
+
+AGENT       ?= claude
+CONFIG_DIR  := $(shell echo "$${XDG_CONFIG_HOME:-$$HOME/.config}/clampdown")
+CONFIG_FILE := $(CONFIG_DIR)/config.json
+
+dev: all install
+	@mkdir -p "$(CONFIG_DIR)"
+	@if [ -f "$(CONFIG_FILE)" ]; then \
+		tmp=$$(mktemp); \
+		jq '. + {"sidecar_image":"$(SIDECAR_IMAGE)","proxy_image":"$(PROXY_IMAGE)","agent_image":"clampdown-$(AGENT):latest"}' \
+			"$(CONFIG_FILE)" > "$$tmp" && mv "$$tmp" "$(CONFIG_FILE)"; \
+	else \
+		printf '{"sidecar_image":"%s","proxy_image":"%s","agent_image":"clampdown-%s:latest"}\n' \
+			"$(SIDECAR_IMAGE)" "$(PROXY_IMAGE)" "$(AGENT)" > "$(CONFIG_FILE)"; \
+	fi
+	@echo "config: $(CONFIG_FILE)"
+	@echo "  sidecar_image: $(SIDECAR_IMAGE)"
+	@echo "  proxy_image:   $(PROXY_IMAGE)"
+	@echo "  agent_image:   clampdown-$(AGENT):latest"
+
+# Remove local image overrides from config.json.
+undev:
+	@if [ -f "$(CONFIG_FILE)" ]; then \
+		tmp=$$(mktemp); \
+		jq 'del(.sidecar_image, .proxy_image, .agent_image)' \
+			"$(CONFIG_FILE)" > "$$tmp" && mv "$$tmp" "$(CONFIG_FILE)"; \
+		echo "removed image overrides from $(CONFIG_FILE)"; \
+	else \
+		echo "no config file at $(CONFIG_FILE)"; \
+	fi
 
 clean:
 	rm -f clampdown \

@@ -578,6 +578,66 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidelines.
 
 ---
 
+## Local development
+
+Build everything, install the launcher, and configure clampdown to use the
+locally-built container images:
+
+```sh
+make dev
+```
+
+This runs `make all` and `make install`, then writes your config file
+(`~/.config/clampdown/config.json`) to point `sidecar_image`, `proxy_image`,
+and `agent_image` at the local image tags (`clampdown-sidecar:latest`, etc.)
+instead of the default `ghcr.io` registry images.
+
+The config file is merged, not overwritten -- existing settings are preserved.
+
+```sh
+# Default: configures the claude agent image
+make dev
+
+# Use opencode instead
+make dev AGENT=opencode
+
+# After make dev, just run normally -- local images are used automatically
+clampdown claude
+```
+
+To revert to registry images:
+
+```sh
+make undev
+```
+
+This removes the image overrides from config.json, leaving other settings intact.
+Subsequent runs will pull from `ghcr.io/89luca89/clampdown-*:latest`.
+
+### Development cycle
+
+```sh
+# 1. Build and configure local images (first time or after changes)
+make dev
+
+# 2. Run the agent against your test project
+clampdown claude --workdir /path/to/project
+
+# 3. Edit source, rebuild, run again
+#    make dev detects unchanged images via stamp files -- only rebuilds what changed
+make dev
+clampdown claude
+
+# 4. Run tests
+make test              # unit tests
+make test-integration  # integration tests (needs podman + internet)
+
+# 5. Done developing -- revert to registry images
+make undev
+```
+
+---
+
 # Future work
 
 **More agents**
