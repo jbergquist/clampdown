@@ -39,6 +39,7 @@ var hardenedMounts = []container.MountSpec{
 	{Dest: "/proc/version", Type: container.DevNull},
 	{Dest: "/proc/sysrq-trigger", Type: container.DevNull},
 	{Dest: "/sys/kernel/vmcoreinfo", Type: container.DevNull},
+	{Dest: "/proc/cmdline", Type: container.DevNull},
 }
 
 func orDefault(override, def string) string {

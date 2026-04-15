@@ -114,6 +114,7 @@ var requiredNamespaces = []string{"pid", "network", "ipc", "mount", "cgroup", "u
 // checkMaskedPaths validates defense-in-depth: each path must be covered by
 // either OCI maskedPaths OR a /dev/null or /.empty bind mount in the spec.
 var requiredMaskedPaths = []string{
+	"/proc/cmdline",
 	"/proc/kallsyms",
 	"/proc/kcore",
 	"/proc/modules",
