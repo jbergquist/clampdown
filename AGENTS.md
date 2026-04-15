@@ -1,9 +1,29 @@
 <\!-- SPDX-License-Identifier: GPL-3.0-only -->
 
-# CLAUDE.md
+@DIAGRAM.md
+@PROJECT-STRUCTURE.md
+@README.md
+@SECURITY.md
+@SUPERVISOR-DIAGRAM.md
 
-Read CLAUDE, DIAGRAM, VECTORS. Read all go files and containerfiles. Read ./.claude/memory. Be ready.
-> Blunt, directive. No filler. No emojis. No engagement optimization. Correct when wrong. Always ultrathink.
+## Behavior
+
+- Blunt, directive.
+- No filler.
+- No emojis.
+- No engagement optimization.
+- Correct when wrong.
+- Always ultrathink.
+
+## Rules (mandatory, zero exceptions)
+
+1. **Read before edit.** Never modify a file you haven't Read in this conversation. Inlined content and training data are not current state — read the file.
+2. **Plan before execute.** New task → read, search, analyze. No writes until user approves.
+3. **Scope to the request.** Do what was asked. No drive-by fixes, no extra features, no touching adjacent code.
+4. **Match existing style.** Read surrounding code before first edit in a file. Match naming, formatting, patterns exactly.
+5. **Approve before apply.** Present approach with alternatives and tradeoffs. Implement after user confirms.
+6. **Never guess.** Unsure what a file contains or how it's structured? Read it. Don't reconstruct from memory or training data.
+7. **Never commit automatically** Only do what you are explicitly asked to do.
 
 ## Index
 
@@ -93,124 +113,6 @@ Automatic — do not wait for user to ask.
 | System compresses prior messages | Finalize `_session_notes.md` with full current state. Inform user |
 | Recurring pattern noticed | Append to `CLAUDE.local.md` as compressed directives |
 
-## Architecture
-
-Three-container model running under rootless podman (or Docker):
-
-```
-HOST
- └─ clampdown (Go CLI, launcher)
-     ├─ SIDECAR (FROM scratch, read-only rootfs)
-     │   PID 1: /entrypoint → /usr/local/bin/podman system service
-     │   Runs: podman API server, crun, OCI hooks
-     │   Seccomp: sidecar profile (~85 blocked, W^X, allows mount/bpf/ptrace)
-     │   Caps: 16 (SYS_ADMIN, NET_ADMIN, LINUX_IMMUTABLE, etc.)
-     │   User: 0:0 inside userns (--userns=keep-id maps host uid)
-     │   NO Landlock (incompatible with mount())
-     │
-     ├─ AUTH PROXY (FROM scratch, read-only rootfs)
-     │   Entrypoint: sandbox-seal -- auth-proxy
-     │   Holds real API keys, proxies requests to upstream APIs
-     │   Seccomp: workload profile (~133 blocked, W^X)
-     │   Caps: cap-drop=ALL, Landlock ConnectTCP:[443,53]
-     │   128m memory, 512 PIDs, ulimit core=0:0
-     │   --network container:SIDECAR
-     │
-     └─ AGENT (Alpine, --network container:SIDECAR)
-         Entrypoint: sandbox-seal -- <agent binary>
-         Gets dummy key (sk-proxy) + base URL → localhost proxy
-         Seccomp: workload profile (~133 blocked, W^X)
-         Caps: cap-drop=ALL
-         Landlock V7 (filesystem, IPC scoping, ConnectTCP:[443,2375,2376])
-         Read-only rootfs, no-new-privileges
-         Spawns NESTED containers via sidecar's podman API
-```
-
-Nested containers (tools the agent launches) get the same workload seccomp +
-Landlock via OCI hooks. Protected paths (universal + `--protect`) propagate
-from the sidecar into nested containers via recursive bind mounts (rbind).
-security-policy blocks explicit RW re-mounts of protected paths (check 15).
-
-## Project Structure
-
-```
-main.go                          Entry point → pkg/cli.Run()
-pkg/
-  agent/
-    agent.go                     Agent interface + registry
-    claude.go                    Claude Code agent (image, egress domains, prompt)
-    opencode.go                  OpenCode agent (image, egress domains, prompt)
-  cli/
-    app.go                       urfave/cli commands (agent subcommands, network, session)
-    config.go                    Config file loading ($XDG_CONFIG_HOME/clampdown/config.json)
-  container/
-    runtime.go                   Runtime interface (StartSidecar, StartProxy, StartAgent, AttachAgent, Exec, List, NudgeTerminal)
-    podman.go                    Podman implementation
-    docker.go                    Docker implementation
-    detect.go                    Runtime auto-detection
-  sandbox/
-    sandbox.go                   Start()/Attach() orchestrator — starts sidecar, proxy, agent; SessionState persistence
-    credentials.go               Opt-in host credential forwarding (gitconfig, gh, ssh)
-    config.go                    Sidecar/agent/proxy config builders, Landlock policy, proxy routing
-    rcfile.go                    .clampdownrc loading (global + per-project KEY=VALUE)
-    paths.go                     Per-project cache paths (hashed workdir)
-    integration_test.go          Integration tests (build tag: integration)
-    mounts/mounts.go             Mount building: workdir, protected paths, config overlays, state dir
-    network/
-      egress.go                  DNS resolution of domain allowlists
-      firewall.go                Runtime iptables rule management (agent/pod allow/block/reset)
-    log.go                       Audit log and terminal output processing (timestamp stripping, ANSI cleanup)
-    seccomp/seccomp.go           Embedded seccomp profile management (//go:embed)
-    session/session.go           Session listing, stop, deletion, sidecar/agent lookup
-    tripwire/tripwire.go         Host-side inotify tripwire: snapshot, monitor, restore RO paths
-container-images/
-  sidecar/
-    Containerfile                FROM scratch assembly (podman-static, iptables, shim, pre-built Go bins)
-    containers.conf              Hardened defaults for nested containers
-    policy.json                  Image pull + archive allowlist (docker.io, ghcr.io, quay.io, localhost)
-    seccomp_nested.json          Workload seccomp profile (= seccomp_agent.json)
-    entrypoint/
-      entrypoint.go              Sidecar init: /proc/sys RO, cgroup v2, iptables firewall, identity files
-      bootstrap.go               Pre-startup kernel configuration and boot checks
-      filter.go                  Seccomp-notif filtering and syscall analysis
-      handlers.go                Syscall interceptors for mount/exec/path operations
-      protect.go                 RO mount overlay and mask enforcement
-      supervisor.go              Signal handling and child process management
-      execallow.go               Hash-verified exec allowlist enforcement
-      go.mod                     Separate module (stdlib only)
-    log/
-      log.go                     /log binary: audit trail injection into sidecar stderr
-    hooks/
-      precreate/
-        seal-inject.go           Injects sandbox-seal into nested containers, derives Landlock policy
-        seal-inject.json         OCI hook registration
-        go.mod                   Separate module (stdlib only)
-      createRuntime/
-        security-policy.go       Validates caps, seccomp, namespaces, mounts, devices
-        security-policy.json     OCI hook registration
-        go.mod                   Separate module (stdlib only)
-    seal/
-      seal.go                    sandbox-seal: Landlock V7 enforcement, FD cleanup, exec
-      go.mod                     Separate module (depends on go-landlock)
-    shims/rename_exdev_shim.c    LD_PRELOAD .so for EXDEV rename fallback (copy+unlink)
-  helpers/
-    sandbox_command_helper.sh    Shell functions replacing commands that always fail (curl, wget, sudo, apk)
-    sandbox_network_helper.c     LD_PRELOAD connect() interceptor: prints guidance on ECONNREFUSED/ETIMEDOUT
-  claude/
-    Containerfile                Claude agent image (Alpine + claude CLI + podman-remote)
-  opencode/
-    Containerfile                OpenCode agent image (Alpine + native Bun binary)
-  proxy/
-    proxy.go                     Auth proxy: reverse proxy with API key injection (stdlib only)
-    Containerfile                FROM scratch proxy image (seal + auth-proxy + CA certs)
-    go.mod                       Separate module (stdlib only)
-tools/
-  extract-syscalls.sh            Static syscall extractor — disassembles binaries/images to identify required syscalls for seccomp tuning
-pkg/sandbox/seccomp/
-  seccomp_sidecar.json           Sidecar seccomp profile (embedded via //go:embed)
-  seccomp_agent.json             Agent/workload seccomp profile (embedded via //go:embed)
-```
-
 ## Build
 
 ```bash
@@ -232,107 +134,6 @@ podman-static download, and iptables extraction remain as Containerfile build st
 
 Container image builds use stamp files (`.sidecar.stamp`, `.claude.stamp`, etc.) —
 Make skips rebuilds when no source file changed.
-
-## Agent Usage
-
-Two agents are supported. Each gets its own CLI subcommand, container image, and
-egress allowlist. The sidecar + security model is identical across all agents.
-
-```bash
-# Claude (Anthropic)
-export ANTHROPIC_API_KEY=sk-ant-...
-./clampdown claude
-
-# OpenCode (multi-provider) — set whichever provider key you use
-export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY, GEMINI_API_KEY, etc.
-./clampdown opencode
-```
-
-API keys are passed to the auth proxy container, never to the agent. The agent
-receives a dummy key (`sk-proxy`) and a base URL pointing at the local proxy.
-Keys are resolved from the host environment or `.clampdownrc`. Each agent
-declares its provider routes in `ProxyRoutes()`.
-
-Build images before first use:
-```bash
-make sidecar          # required for all agents
-make proxy            # auth proxy (required for API key isolation)
-make claude           # or: make opencode
-```
-
-## Key Design Decisions
-
-- **Sidecar is FROM scratch.** All binaries are static Go (CGO_ENABLED=0) — immune
-  to LD_PRELOAD. No shell, no package manager, no libc.
-- **Two seccomp profiles.** Sidecar needs mount/bpf/splice/ptrace for podman. The
-  workload profile blocks all of these. Sidecar seccomp is inherited by all children
-  (kernel guarantee), so io_uring/userfaultfd/perf_event_open are blocked everywhere.
-- **W^X enforcement via seccomp.** All three profiles block mmap/mmap2/mprotect/pkey_mprotect
-  when both PROT_WRITE and PROT_EXEC are set simultaneously (arg2 & 0x6 == 0x6). Prevents
-  RWX memory mappings used in shellcode injection. V8/Node uses W^X (mmap RW then mprotect
-  RX) — unaffected.
-- **OCI hooks enforce policy on nested containers.** `seal-inject` (precreate) injects
-  sandbox-seal as entrypoint wrapper + derives Landlock policy. `security-policy`
-  (createRuntime, 17 checks) validates caps/namespaces/mounts/devices and blocks RW
-  re-mounts of protected paths. Both run for every `podman run` inside the sidecar.
-- **seal-inject is skipped for build containers** (podman build/buildah don't invoke
-  precreate hooks). Build containers still get seccomp_nested.json via containers.conf
-  and security-policy via createRuntime hook, but lack Landlock.
-- **Landlock is a hard requirement.** The launcher checks `/sys/kernel/security/lsm`
-  at startup. If Landlock is confirmed absent, the session refuses to start. If the
-  file is unreadable (e.g., container-in-container), it warns and lets seal enforce
-  inside. Kernel < 6.12 triggers a warning (Landlock present but lacks IPC + TCP scoping).
-- **Yama ptrace_scope preflight.** The launcher reads `/proc/sys/kernel/yama/ptrace_scope`
-  at startup. Warns if Yama is absent or ptrace_scope is 0 (permissive). Advisory only —
-  ptrace is independently blocked by seccomp, but Yama is defense-in-depth from a
-  different kernel subsystem.
-- **Landlock cannot be applied to the sidecar.** mount() triggers Landlock path hooks
-  internally → EPERM. Tested and confirmed.
-- **infraMountPrefixes** in both hooks control which mount sources are allowed for
-  nested containers. Currently: `/var/lib/containers/storage`, `/var/run/containers/storage`,
-  `/var/cache/containers`. If rootless podman uses other paths (e.g., `/run/user/*/containers`),
-  they must be added here or nested container creation will be blocked by security-policy.
-- **Protected paths propagate into nested containers via rbind.** The sidecar's RO
-  overlays (universal + `--protect`) are carried into nested container workdir mounts
-  by recursive bind (default for podman `-v`). Explicit `-v path:path` overrides this,
-  so `security-policy` check 15 (`checkMountReadonly`) blocks RW re-mounts by reading
-  the sidecar's `/proc/self/mountinfo` to discover RO workdir sub-mounts. No config
-  passing needed — self-describing from the sidecar's own mount state.
-- **The agent shares the sidecar's network namespace.** Egress is controlled by iptables
-  chains set up by the entrypoint. Agent: default deny + allowlist. Pods: default allow
-  minus private CIDRs.
-- **Detached sessions.** All containers run with `--restart=unless-stopped` and persist
-  across terminal disconnects. The launcher attaches via `podman attach --detach-keys=ctrl-]`.
-  Sessions are identified by 6-char random hex IDs. SessionState JSON persists to
-  `$STATE/session-<id>.json` for stop/delete operations.
-- **NudgeTerminal on reattach.** On attach, a TIOCSWINSZ ioctl briefly changes the terminal
-  size by one column, then restores it. The kernel sends SIGWINCH through `podman attach`
-  into the container PTY, forcing the TUI to repaint.
-- **Host-side watcher (tripwire).** Monitors all RO-mounted host paths via inotify (fsnotify).
-  Snapshots file content + permissions before launch. On exit, restores all files from
-  snapshots — only writes back entries whose sha256 changed, removes attacker-created files
-  not in the original snapshot. Enabled with `--tripwire` (off by default). Active only while
-  the launcher is attached to the session. This is the last line of defense: the sidecar's
-  UID mapping (uid 0 → subuid ≠ file owner) already prevents writes, but a full escape to
-  host uid 1000 bypasses all in-container protections. The watcher runs on the host, outside
-  all namespaces.
-
-## Common Issues
-
-- **"mount not permitted in nested containers"** — The security-policy createRuntime hook
-  rejects mount sources not under the workdir or `infraMountPrefixes`. If rootless podman
-  uses runtime paths outside these prefixes (e.g., `/run/user/<uid>/containers/`), add the
-  prefix to `infraMountPrefixes` in both `security-policy.go` and `seal-inject.go`.
-- **EXDEV errors in nested containers** — The rename shim (`rename_exdev_shim.so`) is
-  LD_PRELOAD'd via containers.conf. If a tool still fails, check that `LD_PRELOAD` env
-  is not being overridden.
-- **"landlock LSM is not enabled"** — The launcher hard-fails if Landlock is absent from
-  `/sys/kernel/security/lsm`. Enable it: boot with `lsm=landlock,...` or set
-  `CONFIG_LSM=landlock,...` in kernel config.
-- **"Kernel X.Y lacks Landlock IPC and TCP scoping"** — Warning only (not fatal).
-  Kernel < 6.12 lacks full Landlock IPC + TCP scoping. Upgrade to kernel 6.12+.
-- **Landlock hard-fails on kernel < 6.2** — seal.go requires ABI V3+. V4+ features
-  (TCP connect, IoctlDev, IPC scoping) degrade via BestEffort.
 
 ## Testing
 
@@ -384,46 +185,3 @@ Manual verification:
 **Entrypoint, hooks** (`go.mod` each): stdlib only, no external dependencies.
 **Host build**: Go toolchain (all binaries built on host, not in containers).
 **Container images**: Alpine, podman-static v5.8.1 (no golang image needed at build time).
-
-## Security Documentation
-
-- `DIAGRAM.md` — Full security model: container topology, defense layers, seccomp
-  architecture, network policy, Landlock policy, capability model, OCI hook pipeline.
-
-## Source Files
-
-@container-images/proxy/proxy.go
-@container-images/sidecar/entrypoint/bootstrap.go
-@container-images/sidecar/entrypoint/entrypoint.go
-@container-images/sidecar/entrypoint/execallow.go
-@container-images/sidecar/entrypoint/filter.go
-@container-images/sidecar/entrypoint/handlers.go
-@container-images/sidecar/entrypoint/protect.go
-@container-images/sidecar/entrypoint/supervisor.go
-@container-images/sidecar/hooks/createRuntime/security-policy.go
-@container-images/sidecar/hooks/precreate/seal-inject.go
-@container-images/sidecar/log/log.go
-@container-images/sidecar/seal/seal.go
-@pkg/agent/agent.go
-@pkg/agent/claude.go
-@pkg/agent/opencode.go
-@pkg/agent/skill.go
-@pkg/cli/app.go
-@pkg/cli/config.go
-@pkg/container/detect.go
-@pkg/container/docker.go
-@pkg/container/podman.go
-@pkg/container/runtime.go
-@pkg/sandbox/config.go
-@pkg/sandbox/credentials.go
-@pkg/sandbox/gitignore.go
-@pkg/sandbox/log.go
-@pkg/sandbox/mounts/mounts.go
-@pkg/sandbox/network/egress.go
-@pkg/sandbox/network/firewall.go
-@pkg/sandbox/paths.go
-@pkg/sandbox/rcfile.go
-@pkg/sandbox/sandbox.go
-@pkg/sandbox/seccomp/seccomp.go
-@pkg/sandbox/session/session.go
-@pkg/sandbox/tripwire/tripwire.go
