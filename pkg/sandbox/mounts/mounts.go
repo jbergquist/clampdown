@@ -23,6 +23,7 @@ var UniversalProtectedPaths = []agent.ProtectedPath{
 	// ---- workdir-relative ----
 	{Path: ".claude/CLAUDE.md", IsDir: false},
 	{Path: ".claude/rules", IsDir: true},
+	{Path: ".codex", IsDir: true},
 	{Path: ".cursor/rules", IsDir: true},
 	{Path: ".devcontainer", IsDir: true},
 	{Path: ".git/config", IsDir: false},
@@ -38,6 +39,7 @@ var UniversalProtectedPaths = []agent.ProtectedPath{
 	// ---- HOME-relative ----
 	// Sandbox prompts we write (must be RO so agent cannot alter its instructions).
 	{Path: ".claude/CLAUDE-clampdown.md", IsDir: false, GlobalPath: true},
+	{Path: ".codex/AGENTS-clampdown.md", IsDir: false, GlobalPath: true},
 	{Path: ".config/opencode/AGENTS.md", IsDir: false, GlobalPath: true},
 	// Agent-native global instruction files auto-discovered from HOME.
 	{Path: ".claude/CLAUDE.md", IsDir: false, GlobalPath: true},

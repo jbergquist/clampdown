@@ -79,8 +79,7 @@ func Run(args []string) error {
 			},
 			&ucli.StringFlag{
 				Name:  "agent-image",
-				Value: cfg.AgentImage,
-				Usage: "Override agent container image",
+				Usage: "Override agent container image (takes precedence over agent_images map in config.json)",
 			},
 			&ucli.BoolFlag{
 				Name:  "allow-hooks",
@@ -355,7 +354,7 @@ func runAgent(agName string, cfg Config) ucli.ActionFunc {
 		opts := sandbox.Options{
 			AgentAllow:     cmd.String("agent-allow"),
 			AgentArgs:      cmd.Args().Slice(),
-			AgentImage:     cmd.String("agent-image"),
+			AgentImage:     resolveAgentImage(cmd.String("agent-image"), cfg, agName),
 			AgentPolicy:    cmd.String("agent-policy"),
 			AllowHooks:     cmd.Bool("allow-hooks"),
 			CPUs:           cmd.String("cpus"),
@@ -754,4 +753,14 @@ func defaultStr(val, fallback string) string {
 		return val
 	}
 	return fallback
+}
+
+// resolveAgentImage picks the image for an agent: --agent-image CLI flag
+// wins, then cfg.AgentImages[agName], else empty (sandbox falls back to
+// the agent's built-in default).
+func resolveAgentImage(flagVal string, cfg Config, agName string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	return cfg.AgentImages[agName]
 }

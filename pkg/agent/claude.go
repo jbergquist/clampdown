@@ -2,7 +2,12 @@
 
 package agent
 
-import "path/filepath"
+import (
+	"encoding/json"
+	"log/slog"
+	"os"
+	"path/filepath"
+)
 
 // Claude implements Agent for the Claude Code CLI.
 type Claude struct{}
@@ -72,3 +77,36 @@ func (c *Claude) ProxyRoutes() []ProxyRoute {
 }
 
 func (c *Claude) ProxyEnvOverride(_ []ProxyRoute) map[string]string { return nil }
+
+// EnsureClaudeOnboarding makes sure .claude.json has hasCompletedOnboarding: true.
+// Reads existing file if present, sets the key if missing, writes back.
+func EnsureClaudeOnboarding(homeDir string) {
+	path := filepath.Join(homeDir, ".claude.json")
+	var state map[string]any
+
+	data, err := os.ReadFile(path)
+	if err == nil {
+		err = json.Unmarshal(data, &state)
+		if err != nil {
+			slog.Warn("parse claude config", "path", path, "error", err)
+		}
+	}
+	if state == nil {
+		state = make(map[string]any)
+	}
+
+	if state["hasCompletedOnboarding"] == true {
+		return
+	}
+
+	state["hasCompletedOnboarding"] = true
+	out, err := json.Marshal(state)
+	if err != nil {
+		slog.Warn("marshal claude config", "error", err)
+		return
+	}
+	err = os.WriteFile(path, append(out, '\n'), 0o644)
+	if err != nil {
+		slog.Warn("write claude config", "path", path, "error", err)
+	}
+}

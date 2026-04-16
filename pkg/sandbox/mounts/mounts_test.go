@@ -43,6 +43,35 @@ func TestMergeProtection_ExcludesClampdownrc(t *testing.T) {
 	}
 }
 
+func TestUniversalProtectedPaths_IncludesCodexPaths(t *testing.T) {
+	want := map[string]bool{
+		".codex":                     false,
+		".codex/AGENTS-clampdown.md": true,
+	}
+	for _, p := range mounts.UniversalProtectedPaths {
+		global, ok := want[p.Path]
+		if !ok {
+			continue
+		}
+		if p.GlobalPath != global {
+			t.Errorf("%s GlobalPath=%v, want %v", p.Path, p.GlobalPath, global)
+		}
+		delete(want, p.Path)
+	}
+	for path := range want {
+		t.Errorf("missing from UniversalProtectedPaths: %s", path)
+	}
+}
+
+// config.toml must NOT be in UniversalProtectedPaths (openai/codex#17593).
+func TestUniversalProtectedPaths_ExcludesCodexConfig(t *testing.T) {
+	for _, p := range mounts.UniversalProtectedPaths {
+		if p.Path == ".codex/config.toml" {
+			t.Error(".codex/config.toml must not be protected; Codex 0.119.0+ needs to persist trust-dir flags")
+		}
+	}
+}
+
 func TestUniversalMaskedPaths_IncludesExpected(t *testing.T) {
 	want := map[string]bool{".env": false, ".envrc": false, ".clampdownrc": false}
 	for _, m := range mounts.UniversalMaskedPaths {

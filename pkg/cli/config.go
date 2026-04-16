@@ -12,25 +12,25 @@ import (
 
 // Config holds user preferences loaded from config.json.
 type Config struct {
-	AgentAllow     string   `json:"agent_allow"`
-	AgentImage     string   `json:"agent_image"`
-	AgentPolicy    string   `json:"agent_policy"`
-	AllowHooks     bool     `json:"allow_hooks"`
-	CPUs           string   `json:"cpus"`
-	EnableTripwire bool     `json:"tripwire"`
-	GH             bool     `json:"gh"`
-	GitConfig      bool     `json:"gitconfig"`
-	Memory         string   `json:"memory"`
-	PodPolicy      string   `json:"pod_policy"`
-	MaskPaths      []string `json:"mask_paths"`
-	ProtectPaths   []string `json:"protect_paths"`
-	ProxyImage     string   `json:"proxy_image"`
-	RegistryAuth   bool     `json:"registry_auth"`
-	RequireDigest  string   `json:"require_digest"`
-	Runtime        string   `json:"runtime"`
-	SidecarImage   string   `json:"sidecar_image"`
-	SSH            bool     `json:"ssh"`
-	UnmaskPaths    []string `json:"unmask_paths"`
+	AgentAllow     string            `json:"agent_allow"`
+	AgentImages    map[string]string `json:"agent_images"`
+	AgentPolicy    string            `json:"agent_policy"`
+	AllowHooks     bool              `json:"allow_hooks"`
+	CPUs           string            `json:"cpus"`
+	EnableTripwire bool              `json:"tripwire"`
+	GH             bool              `json:"gh"`
+	GitConfig      bool              `json:"gitconfig"`
+	Memory         string            `json:"memory"`
+	PodPolicy      string            `json:"pod_policy"`
+	MaskPaths      []string          `json:"mask_paths"`
+	ProtectPaths   []string          `json:"protect_paths"`
+	ProxyImage     string            `json:"proxy_image"`
+	RegistryAuth   bool              `json:"registry_auth"`
+	RequireDigest  string            `json:"require_digest"`
+	Runtime        string            `json:"runtime"`
+	SidecarImage   string            `json:"sidecar_image"`
+	SSH            bool              `json:"ssh"`
+	UnmaskPaths    []string          `json:"unmask_paths"`
 }
 
 // LoadConfig reads $XDG_CONFIG_HOME/clampdown/config.json.

@@ -332,11 +332,12 @@ func SidecarMaskedPaths(workdir string, masked []agent.MaskedPath) ([]container.
 // Each agent discovers this file via its native mechanism:
 //   - Claude: --append-system-prompt-file (passed via Args)
 //   - OpenCode: ~/.config/opencode/instructions.md (auto-discovered)
+//   - Codex: ~/.codex/config.toml -> model_instructions_file
 func WriteSandboxPrompt(ag agent.Agent, homeDir string) error {
 	// Claude requires onboarding to be marked complete before it accepts
 	// API key auth. Ensure the flag is set in .claude.json.
 	if ag.Name() == "claude" {
-		ensureClaudeOnboarding(filepath.Join(homeDir, ".claude.json"))
+		agent.EnsureClaudeOnboarding(homeDir)
 	}
 
 	containerPath := ag.PromptFile()
@@ -389,38 +390,6 @@ func WriteSkills(ag agent.Agent, homeDir string) error {
 		}
 	}
 	return nil
-}
-
-// ensureClaudeOnboarding makes sure .claude.json has hasCompletedOnboarding: true.
-// Reads existing file if present, sets the key if missing, writes back.
-func ensureClaudeOnboarding(path string) {
-	var state map[string]any
-
-	data, err := os.ReadFile(path)
-	if err == nil {
-		err = json.Unmarshal(data, &state)
-		if err != nil {
-			slog.Warn("parse claude config", "path", path, "error", err)
-		}
-	}
-	if state == nil {
-		state = make(map[string]any)
-	}
-
-	if state["hasCompletedOnboarding"] == true {
-		return
-	}
-
-	state["hasCompletedOnboarding"] = true
-	out, err := json.Marshal(state)
-	if err != nil {
-		slog.Warn("marshal claude config", "error", err)
-		return
-	}
-	err = os.WriteFile(path, append(out, '\n'), 0o644)
-	if err != nil {
-		slog.Warn("write claude config", "path", path, "error", err)
-	}
 }
 
 // resolveKey looks up an API key by name, checking the host environment

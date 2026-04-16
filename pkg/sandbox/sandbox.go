@@ -137,11 +137,22 @@ func Start(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Optio
 	sidecarName := fmt.Sprintf("%s-%s-sidecar", containerPrefix, sessionID)
 	agentName := fmt.Sprintf("%s-%s-%s", containerPrefix, sessionID, ag.Name())
 
+	// Determine the active proxy route before writing agent config files so
+	// agent-specific prep (e.g. Codex auth mode) can match the selected
+	// credential source.
+	proxyRoute := ActiveProxyRoute(ag, rcEnv)
+
 	// Write sandbox prompt to persistent HOME before building mounts so
 	// HOME-relative protected paths exist when ProtectMount runs.
 	err = WriteSandboxPrompt(ag, p.Home)
 	if err != nil {
 		return "", fmt.Errorf("sandbox prompt: %w", err)
+	}
+	if ag.Name() == "codex" {
+		err = agent.PrepareCodexHome(p.Home, proxyRoute)
+		if err != nil {
+			return "", fmt.Errorf("prepare codex home: %w", err)
+		}
 	}
 
 	// Write cross-platform skills to both .claude/skills/ and .agents/skills/.
@@ -221,10 +232,8 @@ func Start(ctx context.Context, rt container.Runtime, ag agent.Agent, opts Optio
 		return "", fmt.Errorf("save session state: %w", err)
 	}
 
-	// Determine active proxy route (first matching key from host env + rcEnv).
 	// Nil means no API key is set — the agent starts without a proxy (e.g.,
-	// Claude OAuth login).
-	proxyRoute := ActiveProxyRoute(ag, rcEnv)
+	// Claude OAuth login or Codex ChatGPT subscription auth).
 	if proxyRoute == nil && len(ag.ProxyRoutes()) > 0 {
 		slog.Warn("no API key found — starting without auth proxy",
 			"agent", ag.Name())

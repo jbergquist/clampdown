@@ -8,6 +8,7 @@ pkg/
   agent/
     agent.go                     Agent interface + registry
     claude.go                    Claude Code agent (image, egress domains, prompt)
+    codex.go                     OpenAI Codex agent (API proxy + ChatGPT auth cache prep)
     opencode.go                  OpenCode agent (image, egress domains, prompt)
     skill.go                     Sandbox skill template + skill directory helpers
   cli/
@@ -77,6 +78,8 @@ container-images/
     sandbox_network_helper.c     LD_PRELOAD connect() interceptor: prints guidance on ECONNREFUSED/ETIMEDOUT
   claude/
     Containerfile                Claude agent image (Alpine + claude CLI + podman-remote)
+  codex/
+    Containerfile                Codex agent image (Alpine + native Codex CLI binary)
   opencode/
     Containerfile                OpenCode agent image (Alpine + native Bun binary)
   proxy/

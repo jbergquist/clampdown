@@ -67,6 +67,7 @@ type MaskedPath struct {
 
 var agents = []Agent{
 	&Claude{},
+	&Codex{},
 	&OpenCode{},
 }
 

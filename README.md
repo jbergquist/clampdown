@@ -255,9 +255,9 @@ make all      # builds sidecar image, agent images, and launcher binary
 make install  # copies binary to ~/.local/bin/clampdown
 ```
 
-`make all` builds four container images (`clampdown-sidecar`, `clampdown-proxy`,
-`clampdown-claude`, `clampdown-opencode`) and the `clampdown` launcher binary. Images
-are rebuilt only when their source changes (stamp files).
+`make all` builds five container images (`clampdown-sidecar`, `clampdown-proxy`,
+`clampdown-claude`, `clampdown-codex`, `clampdown-opencode`) and the `clampdown`
+launcher binary. Images are rebuilt only when their source changes (stamp files).
 
 ---
 
@@ -268,6 +268,7 @@ Store API keys in `~/.config/clampdown/clampdownrc` (created once, used by all s
 ```sh
 # ~/.config/clampdown/clampdownrc
 ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=...
 ```
 
 Per-project overrides go in `.clampdownrc` at the root of each project. Project values
@@ -285,6 +286,9 @@ clampdown claude
 
 # OpenCode (supports multiple providers)
 clampdown opencode
+
+# Codex (OpenAI API key or ChatGPT subscription auth)
+clampdown codex
 
 # Run against a specific directory (defaults to $PWD)
 clampdown claude --workdir /path/to/project
@@ -309,6 +313,7 @@ The first run pulls base images and builds a per-project container storage cache
 | Agent | Command | Supported provider keys |
 |-------|---------|------------------------|
 | Claude Code | `clampdown claude` | `ANTHROPIC_API_KEY` |
+| OpenAI Codex | `clampdown codex` | `OPENAI_API_KEY`, or ChatGPT subscription auth copied from `~/.codex/auth.json` |
 | OpenCode | `clampdown opencode` | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY` |
 
 Keys are passed to the auth proxy, not the agent. The first matching key (from host
@@ -348,8 +353,8 @@ blocked for both agent and tool containers, regardless of policy.
 | `--unmask` | -- | Remove paths from the default mask list (e.g. `--unmask .env`) |
 
 Protected paths are always read-only inside the agent and nested containers, regardless
-of flags: `.git/config`, `.gitmodules`, `.clampdownrc`, `.devcontainer`, `.envrc`,
-`.idea`, `.mcp.json`, `.vscode`. User `--protect` paths get the same enforcement.
+of flags: `.git/config`, `.git/hooks`, `.gitmodules`, `.claude`, `.codex`,
+`.devcontainer`, `.idea`, `.mcp.json`. User `--protect` paths get the same enforcement.
 Protected paths propagate into nested containers via recursive bind mounts; explicit
 RW re-mounts are blocked by the security-policy hook.
 
@@ -568,6 +573,7 @@ make test-integration  # integration tests (requires podman + internet)
 make sidecar           # sidecar image only
 make proxy             # auth proxy image only
 make claude            # claude agent image only
+make codex             # codex agent image only
 make opencode          # opencode agent image only
 make launcher          # launcher binary only
 make install           # install launcher to ~/.local/bin/
@@ -589,20 +595,21 @@ make dev
 
 This runs `make all` and `make install`, then writes your config file
 (`~/.config/clampdown/config.json`) to point `sidecar_image`, `proxy_image`,
-and `agent_image` at the local image tags (`clampdown-sidecar:latest`, etc.)
-instead of the default `ghcr.io` registry images.
+and the `agent_images` map (claude, codex, opencode) at the local image
+tags (`clampdown-sidecar:latest`, etc.) instead of the default `ghcr.io`
+registry images.
 
 The config file is merged, not overwritten -- existing settings are preserved.
+All three agent images are set at once, so any agent can be launched without
+re-running `make dev`.
 
 ```sh
-# Default: configures the claude agent image
 make dev
-
-# Use opencode instead
-make dev AGENT=opencode
 
 # After make dev, just run normally -- local images are used automatically
 clampdown claude
+clampdown codex
+clampdown opencode
 ```
 
 To revert to registry images:
@@ -642,7 +649,6 @@ make undev
 
 **More agents**
   - Gemini CLI
-  - OpenAI Codex.
 
 ---
 
